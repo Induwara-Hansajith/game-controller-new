@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Controller · PC Receiver</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0910; --panel:#17131f; --line:#342842; --ink:#f3eff8; --muted:#aaa0b6; --violet:#8b5cf6; --mint:#56e0b2; --amber:#f5c46a; }
+    * { box-sizing:border-box }
+    body { margin:0; min-height:100vh; background:radial-gradient(ellipse at 78% 8%,#24163d 0,transparent 36%),var(--bg); color:var(--ink); font:15px/1.5 "Segoe UI",system-ui,sans-serif; }
+    .wrap { width:min(1080px,calc(100% - 36px)); margin:0 auto; padding:38px 0 54px; }
+    header { display:flex; align-items:center; gap:14px; margin-bottom:26px; }
+    .mark { width:44px;height:44px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(140deg,#a78bfa,#6d28d9);font-size:23px;box-shadow:0 8px 28px #7c3aed55 }
+    h1 { font-size:22px; letter-spacing:-.03em; margin:0 } header p { margin:2px 0 0;color:var(--muted);font-size:13px }
+    .grid { display:grid;grid-template-columns:1.1fr .9fr;gap:18px }
+    .card { border:1px solid var(--line);border-radius:22px;background:linear-gradient(145deg,#1a1623,#121017);padding:22px;box-shadow:0 20px 55px #0003 }
+    .wide { grid-column:1/-1 }
+    .eyebrow { margin:0 0 14px;color:#c4b5fd;font-size:11px;letter-spacing:.17em;text-transform:uppercase }
+    .status { display:flex;align-items:center;gap:10px;font-size:20px;font-weight:650 }
+    .dot { width:10px;height:10px;border-radius:50%;background:#706a78;box-shadow:0 0 0 4px #706a7822 }
+    .dot.live { background:var(--mint);box-shadow:0 0 0 4px #56e0b222 }
+    .muted { color:var(--muted);font-size:13px }
+    .pair { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px }
+    .tile { background:#0e0c12;border:1px solid #30283a;border-radius:16px;padding:15px }
+    .label { color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.12em }
+    .value { margin-top:6px;font-size:22px;font-weight:700;letter-spacing:.06em;word-break:break-word }
+    .address { display:block;font-size:15px;letter-spacing:0;margin:4px 0 }
+    .pin { color:#d8c7ff;font-variant-numeric:tabular-nums;letter-spacing:.2em }
+    .meter-row { display:grid;grid-template-columns:90px 1fr 48px;align-items:center;gap:10px;margin:17px 0;color:var(--muted);font-size:13px }
+    .track { height:9px;border-radius:999px;background:#28232f;overflow:hidden }
+    .fill { height:100%;width:0;background:linear-gradient(90deg,#7c3aed,#c084fc);border-radius:inherit;transition:width 90ms linear }
+    .meter-val { text-align:right;color:var(--ink);font-variant-numeric:tabular-nums }
+    .buttons { display:flex;gap:8px;flex-wrap:wrap;margin-top:15px }
+    .btn { min-width:40px;padding:7px 11px;border:1px solid #40384a;border-radius:12px;color:#8e8797;text-align:center;background:#0f0d13;font-size:12px }
+    .btn.on { color:#fff;border-color:#9b72f4;background:#673ab733;box-shadow:0 0 18px #8b5cf633 }
+    .note { border-left:3px solid var(--violet);padding:10px 13px;background:#21182e;border-radius:0 12px 12px 0;color:#d7c9ef;font-size:13px }
+    .footer { margin:18px 2px;color:#837b8d;font-size:12px }
+    @media(max-width:700px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.pair{grid-template-columns:1fr 1fr}.wrap{padding-top:24px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header><div class="mark" aria-hidden="true">⌁</div><div><h1>Pocket Controller</h1><p>Windows receiver · local network</p></div></header>
+    <div class="grid">
+      <section class="card">
+        <p class="eyebrow">Connection</p>
+        <div class="status"><span id="dot" class="dot"></span><span id="connection">Waiting for phone</span></div>
+        <p id="phone" class="muted">Open Pocket Controller on your phone and enter one of these PC addresses.</p>
+        <div class="pair">
+          <div class="tile"><div class="label">PC address</div><div id="addresses" class="value">Looking up…</div><div class="muted">Port 8766</div></div>
+          <div class="tile"><div class="label">Pairing PIN</div><div id="pin" class="value pin">······</div><div class="muted">Changes every time the receiver starts</div></div>
+        </div>
+      </section>
+      <section class="card">
+        <p class="eyebrow">Virtual controller</p>
+        <div id="vjoy" class="status" style="font-size:16px">Checking vJoy…</div>
+        <p id="message" class="muted">The receiver uses your installed vJoy driver. It will not install drivers or change Windows settings.</p>
+        <div class="note">Steering → X axis · throttle → Y axis · brake → Z axis · buttons 1–8</div>
+      </section>
+      <section class="card wide">
+        <p class="eyebrow">Live input</p>
+        <div class="meter-row"><span>Steering</span><div class="track"><div id="steer" class="fill"></div></div><span id="steerText" class="meter-val">0%</span></div>
+        <div class="meter-row"><span>Throttle</span><div class="track"><div id="throttle" class="fill"></div></div><span id="throttleText" class="meter-val">0%</span></div>
+        <div class="meter-row"><span>Brake</span><div class="track"><div id="brake" class="fill"></div></div><span id="brakeText" class="meter-val">0%</span></div>
+        <div class="buttons" id="buttons"></div>
+      </section>
+    </div>
+    <p class="footer">Keep the PC and phone on the same Wi‑Fi network. Use a trusted private network for the first version.</p>
+  </main>
+  <script>
+    const buttonNodes = Array.from({length:8},(_,i)=>{const node=document.createElement('span');node.className='btn';node.textContent=String(i+1);document.querySelector('#buttons').append(node);return node;});
+    const pct = value => Math.round(Math.max(0,Math.min(1,value))*100);
+    async function refresh(){
+      try{
+        const s=await (await fetch('/status',{cache:'no-store'})).json();
+        document.querySelector('#dot').classList.toggle('live',s.connected);
+        document.querySelector('#connection').textContent=s.connected?'Phone connected':'Waiting for phone';
+        document.querySelector('#phone').textContent=s.connected?`${s.phone} · ${s.message}`:'Open Pocket Controller on your phone and enter one of these PC addresses.';
+        document.querySelector('#addresses').innerHTML=(s.addresses||[]).map(a=>`<span class="address">${a}</span>`).join('')||'<span class="muted">No LAN address found</span>';
+        document.querySelector('#pin').textContent=s.pin;
+        document.querySelector('#vjoy').textContent=s.vjoy;
+        document.querySelector('#message').textContent=s.message;
+        const steer=Math.max(-1,Math.min(1,s.steer||0));
+        const steerFill=document.querySelector('#steer');
+        steerFill.style.width=`${Math.abs(steer)*50}%`;steerFill.style.marginLeft=`${steer<0?50+steer*50:50}%`;
+        document.querySelector('#steerText').textContent=`${Math.round(steer*100)}%`;
+        for(const key of ['throttle','brake']){const n=pct(s[key]||0);document.querySelector(`#${key}`).style.width=`${n}%`;document.querySelector(`#${key}`).style.marginLeft='0';document.querySelector(`#${key}Text`).textContent=`${n}%`;}
+        buttonNodes.forEach((node,i)=>node.classList.toggle('on',Boolean((s.buttons||[])[i])));
+      }catch(_){document.querySelector('#connection').textContent='Receiver unavailable';}
+    }
+    refresh();setInterval(refresh,500);
+  </script>
+</body>
+</html>

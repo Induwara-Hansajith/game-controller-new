@@ -1,0 +1,2 @@
+# The receiver uses only the Python standard library. PyInstaller builds the standalone PC app.
+pyinstaller>=6.15,<7

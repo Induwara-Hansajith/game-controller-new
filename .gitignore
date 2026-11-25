@@ -1,0 +1,14 @@
+.gradle/
+**/build/
+pc/dist/
+pc/work/
+pc/.venv-build/
+pc/PocketControllerPC.spec
+local.properties
+*.iml
+.idea/
+__pycache__/
+*.py[cod]
+*.apk
+*.aab
+.venv/
