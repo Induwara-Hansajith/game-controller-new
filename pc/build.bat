@@ -10,7 +10,7 @@ if not exist ".venv-build\Scripts\python.exe" (
 ".venv-build\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 goto :failed
 
-".venv-build\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name PocketControllerPC --add-data "web;web" desktop_app.py
+".venv-build\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed --name PocketControllerPC --add-data "web;web" --add-data "vgamepad;vgamepad" desktop_app.py
 if errorlevel 1 goto :failed
 
 echo.

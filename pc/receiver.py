@@ -12,7 +12,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from controller import VJoyDevice, VJoyUnavailable
+from controller import ControllerDevice, VJoyDevice, VJoyUnavailable
 
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -348,7 +348,7 @@ async def check_shutdown(server: asyncio.Server) -> None:
 
 
 async def main() -> None:
-    device = VJoyDevice()
+    device = ControllerDevice()
     vjoy_status = device.description
     addresses = local_ipv4_addresses()
     update_state(vjoy=vjoy_status, addresses=addresses)

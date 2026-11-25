@@ -343,10 +343,10 @@ class PocketControllerApp:
         else:
             self.phone_var.set("Connect phone to same Wi-Fi and open Pocket Controller app (auto-discovery active).")
 
-        vjoy_str = str(data.get("vjoy", "vJoy unavailable"))
+        vjoy_str = str(data.get("vjoy", "Gamepad unavailable"))
         self.vjoy_var.set(vjoy_str)
-        is_vjoy_ok = "owned" in vjoy_str or "available" in vjoy_str
-        self.vjoy_badge_var.set("VJOY ONLINE" if is_vjoy_ok else "VJOY OFFLINE")
+        is_vjoy_ok = "active" in vjoy_str.lower() or "owned" in vjoy_str.lower() or "ready" in vjoy_str.lower() or "available" in vjoy_str.lower()
+        self.vjoy_badge_var.set("XINPUT/VJOY ONLINE" if is_vjoy_ok else "GAMEPAD OFFLINE")
         self.vjoy_badge.configure(fg="#10b981" if is_vjoy_ok else "#f43f5e",
                                   bg="#0f291e" if is_vjoy_ok else "#2d1219")
 

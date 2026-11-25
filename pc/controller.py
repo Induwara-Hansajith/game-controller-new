@@ -196,3 +196,190 @@ class VJoyDevice:
             except Exception:
                 pass
         self._acquired = False
+
+
+class Xbox360Device:
+    """Emulates a genuine Microsoft Xbox 360 Controller (XInput) via ViGEmBus.
+
+    Provides universal out-of-the-box plug & play compatibility with all Steam games,
+    Xbox PC / Game Pass titles, Forza Horizon, Assetto Corsa, F1, Euro Truck Simulator,
+    and flight/racing simulators.
+    """
+
+    def __init__(self) -> None:
+        self._pad = None
+        self._acquired = False
+        self._error: str | None = None
+
+    @property
+    def is_available(self) -> bool:
+        if self._acquired:
+            return True
+        try:
+            import vgamepad as vg
+
+            test_pad = vg.VX360Gamepad()
+            del test_pad
+            return True
+        except Exception as exc:
+            self._error = str(exc)
+            return False
+
+    @property
+    def description(self) -> str:
+        if self._acquired and self._pad is not None:
+            return "Xbox 360 Controller (ViGEmBus): Active · Native XInput"
+        if self.is_available:
+            return "Xbox 360 Controller (ViGEmBus): Available"
+        return f"Xbox 360 Controller unavailable ({self._error or 'ViGEmBus not loaded'})"
+
+    def acquire(self) -> None:
+        if self._acquired and self._pad is not None:
+            self.neutral()
+            return
+        try:
+            import vgamepad as vg
+
+            self._pad = vg.VX360Gamepad()
+            self._acquired = True
+            self.neutral()
+        except Exception as exc:
+            self._error = str(exc)
+            raise RuntimeError(f"Could not initialize Xbox 360 controller: {exc}") from exc
+
+    def apply(self, data: dict) -> None:
+        if not self._acquired or self._pad is None:
+            return
+        import vgamepad as vg
+
+        pad = self._pad
+        steer = max(-1.0, min(1.0, float(data.get("steer", 0.0) or 0.0)))
+        throttle = max(0.0, min(1.0, float(data.get("throttle", 0.0) or 0.0)))
+        brake = max(0.0, min(1.0, float(data.get("brake", 0.0) or 0.0)))
+        buttons = data.get("buttons", [])
+
+        # Left Thumbstick X-axis for analog steering (-1.0 to 1.0)
+        pad.left_joystick_float(x_value_float=steer, y_value_float=0.0)
+        # Right Trigger for progressive Gas (0.0 to 1.0)
+        pad.right_trigger_float(value_float=throttle)
+        # Left Trigger for progressive Brake (0.0 to 1.0)
+        pad.left_trigger_float(value_float=brake)
+
+        # Standard Xbox 360 button matrix
+        btn_map = [
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_A,              # 0: A
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_B,              # 1: B
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              # 2: X
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,              # 3: Y
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,   # 4: LB (Gear Down / Clutch)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,  # 5: RB (Gear Up)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,            # 6: Back (Handbrake)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_START,           # 7: Start (Nitro / Boost)
+        ]
+
+        for i, xbtn in enumerate(btn_map):
+            if i < len(buttons) and buttons[i]:
+                pad.press_button(button=xbtn)
+            else:
+                pad.release_button(button=xbtn)
+
+        pad.update()
+
+    def neutral(self) -> None:
+        if not self._acquired or self._pad is None:
+            return
+        pad = self._pad
+        pad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
+        pad.right_trigger_float(value_float=0.0)
+        pad.left_trigger_float(value_float=0.0)
+        pad.reset()
+        pad.update()
+
+    def close(self) -> None:
+        if self._pad is not None:
+            try:
+                self.neutral()
+            except Exception:
+                pass
+            self._pad = None
+        self._acquired = False
+
+
+class UnifiedDevice:
+    """Unified Game Controller supporting both native Xbox 360 (XInput via ViGEmBus)
+    and DirectInput (vJoy) simultaneously for universal compatibility with all Steam,
+    Xbox Game Pass, and simulator games."""
+
+    def __init__(self, vjoy_id: int = DEVICE_ID) -> None:
+        self.xbox = Xbox360Device()
+        self.vjoy = VJoyDevice(vjoy_id)
+        self._acquired = False
+
+    @property
+    def is_available(self) -> bool:
+        return self.xbox.is_available or self.vjoy.is_available
+
+    @property
+    def description(self) -> str:
+        active = []
+        if self.xbox._acquired:
+            active.append("Xbox 360: Active (XInput)")
+        elif self.xbox.is_available:
+            active.append("Xbox 360: Ready")
+        if self.vjoy._acquired:
+            active.append(f"vJoy {self.vjoy.device_id}: Owned")
+        elif self.vjoy.is_available:
+            active.append(f"vJoy {self.vjoy.device_id}: Ready")
+        return " · ".join(active) if active else "No virtual gamepad driver ready"
+
+    def acquire(self) -> None:
+        errors = []
+        acquired_any = False
+        try:
+            self.xbox.acquire()
+            acquired_any = True
+        except Exception as exc:
+            errors.append(f"Xbox 360: {exc}")
+
+        try:
+            self.vjoy.acquire()
+            acquired_any = True
+        except Exception as exc:
+            errors.append(f"vJoy: {exc}")
+
+        if not acquired_any:
+            raise VJoyUnavailable("; ".join(errors))
+        self._acquired = True
+
+    def apply(self, data: dict) -> None:
+        if self.xbox._acquired:
+            try:
+                self.xbox.apply(data)
+            except Exception:
+                pass
+        if self.vjoy._acquired:
+            try:
+                self.vjoy.apply(data)
+            except Exception:
+                pass
+
+    def neutral(self) -> None:
+        if self.xbox._acquired:
+            try:
+                self.xbox.neutral()
+            except Exception:
+                pass
+        if self.vjoy._acquired:
+            try:
+                self.vjoy.neutral()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        self.xbox.close()
+        self.vjoy.close()
+        self._acquired = False
+
+
+# Default export alias
+ControllerDevice = UnifiedDevice

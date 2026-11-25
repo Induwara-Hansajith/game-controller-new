@@ -555,10 +555,10 @@
         document.getElementById('pinText').innerText = data.pin || '------';
         document.getElementById('phoneStatusMsg').innerText = isLive ? (data.message || 'Phone Connected') : 'Connect your phone to the same Wi-Fi and input the IP and PIN in the Android app.';
 
-        // vJoy
-        const vjoyDesc = data.vjoy || 'vJoy unavailable';
+        // Gamepad Status (Xbox 360 XInput + vJoy)
+        const vjoyDesc = data.vjoy || 'Gamepad unavailable';
         document.getElementById('vjoyStatus').innerText = vjoyDesc;
-        const isVjoyOk = vjoyDesc.includes('owned') || vjoyDesc.includes('available');
+        const isVjoyOk = vjoyDesc.toLowerCase().includes('active') || vjoyDesc.toLowerCase().includes('owned') || vjoyDesc.toLowerCase().includes('ready') || vjoyDesc.toLowerCase().includes('available');
         document.getElementById('vjoyBadge').innerText = isVjoyOk ? 'ONLINE' : 'OFFLINE';
         document.getElementById('vjoyBadge').style.color = isVjoyOk ? 'var(--emerald)' : 'var(--rose)';
 
