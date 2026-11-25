@@ -425,28 +425,24 @@ class Xbox360Device:
         w_buttons = 0
         for flag in pressed:
             w_buttons |= int(flag)
-        report_key = (
-            round(lx * 32767),
-            round(ly * 32767),
-            round(rx * 32767),
-            round(ry * 32767),
-            round(lt * 255),
-            round(rt * 255),
-            w_buttons,
-        )
+        s_lx = round(lx * 32767)
+        s_ly = round(ly * 32767)
+        s_rx = round(rx * 32767)
+        s_ry = round(ry * 32767)
+        b_lt = round(lt * 255)
+        b_rt = round(rt * 255)
+        report_key = (s_lx, s_ly, s_rx, s_ry, b_lt, b_rt, w_buttons)
         if report_key == self._last_report_key:
             return
 
-        pad.left_joystick_float(x_value_float=lx, y_value_float=ly)
-        pad.right_joystick_float(x_value_float=rx, y_value_float=ry)
-        pad.left_trigger_float(value_float=lt)
-        pad.right_trigger_float(value_float=rt)
-        for flag in all_flags | set(dpad_map.values()):
-            if flag in pressed:
-                pad.press_button(button=flag)
-            else:
-                pad.release_button(button=flag)
-
+        report = pad.report
+        report.sThumbLX = s_lx
+        report.sThumbLY = s_ly
+        report.sThumbRX = s_rx
+        report.sThumbRY = s_ry
+        report.bLeftTrigger = b_lt
+        report.bRightTrigger = b_rt
+        report.wButtons = w_buttons
         pad.update()
         self._last_report_key = report_key
 

@@ -23,6 +23,8 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class ControllerPad extends View {
     public static final int MODE_RACEPAD = 0;
@@ -109,13 +111,15 @@ public final class ControllerPad extends View {
 
     private Listener listener;
     private Vibrator vibrator;
+    private final ExecutorService hapticExecutor = Executors.newSingleThreadExecutor();
 
     private int currentMode = MODE_RACEPAD;
     private boolean connected = false;
     private boolean reconnecting = false;
     private String pcDisplayName = "PC";
-    private String latencyText = "125Hz";
+    private String latencyText = "250Hz";
     private boolean gyroEnabled = true;
+    private boolean instantTapPedals = false;
     private float wheelMaxDeg = 90f;
 
     private final List<ControlItem> raceItems = new ArrayList<>();
@@ -399,6 +403,10 @@ public final class ControllerPad extends View {
                     : (layoutId == LAYOUT_RACEPAD_GYRO ? "racepad_gyro" : "racepad");
             listener.onLayoutChanged(modeName, exportLayoutJson(layoutId));
         }
+    }
+
+    public void setInstantTapPedals(boolean instant) {
+        this.instantTapPedals = instant;
     }
 
     public void setGyroEnabled(boolean enabled) {
@@ -913,7 +921,7 @@ public final class ControllerPad extends View {
             if (blendingFromTouch) {
                 float diff = targetDeg - displayWheelDeg;
                 if (Math.abs(diff) > 0.35f) {
-                    float k = 1f - (float) Math.exp(-dt * 26f);
+                    float k = 1f - (float) Math.exp(-dt * 32f);
                     displayWheelDeg += diff * k;
                     this.steer = clamp(displayWheelDeg / wheelMaxDeg, -1f, 1f);
                     touchWheelDeg = displayWheelDeg;
@@ -933,7 +941,7 @@ public final class ControllerPad extends View {
 
         // Smooth caster self-centering when touch steering is released.
         if (Math.abs(displayWheelDeg) > 0.35f) {
-            float k = 1f - (float) Math.exp(-dt * 16f);
+            float k = 1f - (float) Math.exp(-dt * 22f);
             displayWheelDeg += (0f - displayWheelDeg) * k;
             touchWheelDeg = displayWheelDeg;
             this.steer = clamp(displayWheelDeg / wheelMaxDeg, -1f, 1f);
@@ -1337,11 +1345,19 @@ public final class ControllerPad extends View {
 
                 switch (hit.kind) {
                     case KIND_PEDAL: {
-                        float cy = itemCy(hit, w, h);
-                        float hh = itemHalfH(hit, w, h);
-                        float top = cy - hh;
-                        float bottom = cy + hh;
-                        float val = clamp((bottom - y) / Math.max(1f, bottom - top), 0.03f, 1.0f);
+                        float val;
+                        if (instantTapPedals) {
+                            val = 1.0f;
+                        } else {
+                            float cy = itemCy(hit, w, h);
+                            float hh = itemHalfH(hit, w, h);
+                            float top = cy - hh;
+                            float bottom = cy + hh;
+                            float hSpan = Math.max(1f, bottom - top);
+                            float effBottom = bottom - hSpan * 0.06f;
+                            float effTop = top + hSpan * 0.22f;
+                            val = clamp((effBottom - y) / Math.max(1f, effBottom - effTop), 0.03f, 1.0f);
+                        }
                         if ("clutch".equals(hit.id)) nextClutch = Math.max(nextClutch, val);
                         else if ("brake".equals(hit.id)) nextBrake = Math.max(nextBrake, val);
                         else if ("gas".equals(hit.id)) nextThrottle = Math.max(nextThrottle, val);
@@ -1377,9 +1393,10 @@ public final class ControllerPad extends View {
                 }
             }
 
+            boolean newBtnPress = false;
             for (int b = 0; b < 16; b++) {
                 if (nextButtons[b] && !buttons[b]) {
-                    triggerHaptic();
+                    newBtnPress = true;
                     break;
                 }
             }
@@ -1415,6 +1432,7 @@ public final class ControllerPad extends View {
             System.arraycopy(buttons, 0, displayedButtons, 0, 16);
 
             notifyInputChanged();
+            if (newBtnPress) triggerHaptic();
             postInvalidateOnAnimation();
             return true;
         }
@@ -1747,11 +1765,15 @@ public final class ControllerPad extends View {
     private void triggerHaptic() {
         try {
             if (vibrator != null && vibrator.hasVibrator()) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator.vibrate(VibrationEffect.createOneShot(12, VibrationEffect.DEFAULT_AMPLITUDE));
-                } else {
-                    vibrator.vibrate(12);
-                }
+                hapticExecutor.execute(() -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator.vibrate(VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE));
+                        } else {
+                            vibrator.vibrate(10);
+                        }
+                    } catch (Exception ignored) {}
+                });
             } else {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
             }
@@ -1774,7 +1796,11 @@ public final class ControllerPad extends View {
     private void triggerLightTick() {
         try {
             if (vibrator != null && vibrator.hasVibrator() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(8, 90));
+                hapticExecutor.execute(() -> {
+                    try {
+                        vibrator.vibrate(VibrationEffect.createOneShot(7, 80));
+                    } catch (Exception ignored) {}
+                });
             } else {
                 performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
             }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-beta.7 - Competitive F1 ultra-low-latency tuning
+
+### Android mobile app
+
+- **Binary `PCU1` UDP fast-path (`250Hz` active / `0ms` button & pedal edge wakeup):** added zero-allocation 68-byte binary UDP packets alongside `50Hz` idle heartbeats; gear shifts, button presses, and pedal taps transmit immediately without waiting on send-loop sleep.
+- **Competitive F1 steering & pedal profiles:** added selectable **Steering & Response Feel** (**F1 Crisp** default with `22–85Hz` adaptive filter and `0.35°` deadzone, **Balanced**, and **Smooth**), added **`45°`** wheel lock option for rapid chicane turn-in, added **Instant 100% Tap Pedals (F1)** option in Setup, tuned default progressive pedals so the upper `22%` reaches `100%`, and offloaded haptic vibration calls off the touch/network path.
+
+### Windows PC companion
+
+- Added `struct`-decoded `PCU1` 68-byte binary UDP support, direct `XUSB_REPORT` writes in `Xbox360Device`, hot-path removal of redundant per-packet `vJoy` driver queries, background-threaded LAN address refresh, and Windows `1ms` multimedia timer resolution (`timeBeginPeriod(1)` + `ABOVE_NORMAL_PRIORITY_CLASS`).
+
 ## 0.1.0-beta.6 - Gyro Racepad layout with hidden wheel & wider left/right pedals
 
 ### Android mobile app

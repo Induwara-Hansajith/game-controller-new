@@ -41,6 +41,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -76,11 +78,21 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private volatile String activeHost = "";
     private volatile String activePin = "";
     private volatile String sessionToken = "";
+    private volatile byte[] sessionBytes;
+    private volatile boolean binaryUdpEnabled;
     private volatile int udpPort = 0;
     private final Object tcpWriteLock = new Object();
 
     private static final float TWO_PI = (float) (2.0 * Math.PI);
-    private static final float[] LOCK_DEG_OPTIONS = {60f, 90f, 135f, 180f};
+    private static final float[] LOCK_DEG_OPTIONS = {45f, 60f, 90f, 135f, 180f};
+    private static final int PROFILE_F1 = 0;
+    private static final int PROFILE_BALANCED = 1;
+    private static final int PROFILE_SMOOTH = 2;
+    private static final String[] PROFILE_LABELS = {"F1 Crisp", "Balanced", "Smooth"};
+    private volatile int responseProfile = PROFILE_F1;
+    private volatile boolean instantTapPedals = false;
+    private volatile boolean urgentEdgePending;
+    private volatile int prevEdgeBits;
 
     private final float[] rawQuat = new float[4];
     private final float[] currentQuat = new float[4];
@@ -152,8 +164,11 @@ public final class MainActivity extends Activity implements SensorEventListener,
         SharedPreferences prefs = getSharedPreferences("controller", MODE_PRIVATE);
         wheelMaxDeg = prefs.getFloat("wheel_max_deg", 90f);
         gyroEnabled = rotationSensor != null && prefs.getBoolean("wheel_rotation_enabled", true);
+        responseProfile = Math.max(0, Math.min(2, prefs.getInt("response_profile", PROFILE_F1)));
+        instantTapPedals = prefs.getBoolean("instant_tap_pedals", false);
         controllerPad.setWheelMaxDeg(wheelMaxDeg);
         controllerPad.setGyroEnabled(gyroEnabled);
+        controllerPad.setInstantTapPedals(instantTapPedals);
         controllerPad.importLayoutJson(ControllerPad.LAYOUT_RACEPAD, prefs.getString("layout_racepad_v1", ""));
         controllerPad.importLayoutJson(ControllerPad.LAYOUT_RACEPAD_GYRO, prefs.getString("layout_racepad_gyro_v1", ""));
         controllerPad.importLayoutJson(ControllerPad.LAYOUT_GAMEPAD, prefs.getString("layout_gamepad_v1", ""));
@@ -218,10 +233,30 @@ public final class MainActivity extends Activity implements SensorEventListener,
         this.dpadDown = newDpadDown;
         this.dpadLeft = newDpadLeft;
         this.dpadRight = newDpadRight;
+        int edgeBits = 0;
         if (newButtons != null) {
-            System.arraycopy(newButtons, 0, this.buttons, 0, Math.min(newButtons.length, 16));
+            int len = Math.min(newButtons.length, 16);
+            System.arraycopy(newButtons, 0, this.buttons, 0, len);
+            for (int i = 0; i < len; i++) {
+                if (newButtons[i]) edgeBits |= (1 << i);
+            }
         }
+        if (newDpadUp) edgeBits |= (1 << 16);
+        if (newDpadDown) edgeBits |= (1 << 17);
+        if (newDpadLeft) edgeBits |= (1 << 18);
+        if (newDpadRight) edgeBits |= (1 << 19);
+        if (newThrottle > 0.01f) edgeBits |= (1 << 20);
+        if (newBrake > 0.01f) edgeBits |= (1 << 21);
+        if (newClutch > 0.01f) edgeBits |= (1 << 22);
+        if (newHandbrake > 0.01f) edgeBits |= (1 << 23);
+        if (newLt > 0.01f) edgeBits |= (1 << 24);
+        if (newRt > 0.01f) edgeBits |= (1 << 25);
+        if (this.touchingWheel) edgeBits |= (1 << 26);
+        if (this.touchingLeftStick) edgeBits |= (1 << 27);
+        boolean edge = edgeBits != prevEdgeBits;
+        prevEdgeBits = edgeBits;
         synchronized (sendLock) {
+            if (edge) urgentEdgePending = true;
             sendPending = true;
             sendLock.notifyAll();
         }
@@ -427,6 +462,63 @@ public final class MainActivity extends Activity implements SensorEventListener,
         }
         refreshRangeStyles.run();
         settingsCard.addView(rangeRow, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView profileLabel = new TextView(this);
+        profileLabel.setText("Steering & Response Feel");
+        profileLabel.setTextColor(0xffcbd5e1);
+        profileLabel.setTextSize(12);
+        profileLabel.setPadding(0, dp(10), 0, dp(6));
+        settingsCard.addView(profileLabel);
+
+        LinearLayout profileRow = new LinearLayout(this);
+        profileRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button[] profileBtns = new Button[PROFILE_LABELS.length];
+        for (int i = 0; i < PROFILE_LABELS.length; i++) {
+            Button pBtn = new Button(this);
+            pBtn.setText(PROFILE_LABELS[i]);
+            pBtn.setTextSize(11.5f);
+            pBtn.setAllCaps(false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(36), 1f);
+            if (i < PROFILE_LABELS.length - 1) lp.setMargins(0, 0, dp(6), 0);
+            profileRow.addView(pBtn, lp);
+            profileBtns[i] = pBtn;
+        }
+        Runnable refreshProfileStyles = () -> {
+            for (int i = 0; i < PROFILE_LABELS.length; i++) {
+                boolean selected = responseProfile == i;
+                GradientDrawable pillBg = new GradientDrawable();
+                pillBg.setColor(selected ? 0xff7c3aed : 0xff120e1c);
+                pillBg.setCornerRadius(dp(8));
+                pillBg.setStroke(dp(1), selected ? 0xffc4b5fd : 0xff292038);
+                profileBtns[i].setBackground(pillBg);
+                profileBtns[i].setTextColor(selected ? Color.WHITE : 0xffcbd5e1);
+            }
+        };
+        for (int i = 0; i < PROFILE_LABELS.length; i++) {
+            final int profileIdx = i;
+            profileBtns[i].setOnClickListener(v -> {
+                responseProfile = profileIdx;
+                getSharedPreferences("controller", MODE_PRIVATE).edit()
+                        .putInt("response_profile", responseProfile)
+                        .apply();
+                refreshProfileStyles.run();
+            });
+        }
+        refreshProfileStyles.run();
+        settingsCard.addView(profileRow, new LinearLayout.LayoutParams(-1, -2));
+
+        Switch pedalToggle = new Switch(this);
+        pedalToggle.setText("Instant 100% Tap Pedals (F1)");
+        pedalToggle.setTextColor(Color.WHITE);
+        pedalToggle.setChecked(instantTapPedals);
+        pedalToggle.setOnCheckedChangeListener((btn, checked) -> {
+            instantTapPedals = checked;
+            getSharedPreferences("controller", MODE_PRIVATE).edit()
+                    .putBoolean("instant_tap_pedals", instantTapPedals)
+                    .apply();
+            controllerPad.setInstantTapPedals(instantTapPedals);
+        });
+        settingsCard.addView(pedalToggle, new LinearLayout.LayoutParams(-1, dp(38)));
 
         Button centerBtn = createOutlineButton("⌖ Calibrate Neutral Center");
         centerBtn.setOnClickListener(v -> {
@@ -679,6 +771,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 if (!desiredConnected || token != connectionToken) throw new InterruptedException("Cancelled");
 
                 sessionToken = readyObj.optString("session", "");
+                binaryUdpEnabled = readyObj.optBoolean("binary_udp", false);
+                sessionBytes = binaryUdpEnabled ? parseHexBytes(sessionToken) : null;
                 udpPort = readyObj.optInt("udp_port", 0);
                 udpAcked = false;
                 udpSeq = 0L;
@@ -711,7 +805,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
                         dialogStatusText.setText("Connected to " + host);
                         dialogStatusText.setTextColor(0xff10b981);
                     }
-                    controllerPad.setConnectionStatus(true, displayHost, "125Hz TCP");
+                    controllerPad.setConnectionStatus(true, displayHost, "250Hz TCP");
                     if (setupDialog != null && setupDialog.isShowing()) {
                         setupDialog.dismiss();
                     }
@@ -745,7 +839,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
                                         udpAcked = true;
                                         runOnUiThread(() -> {
                                             if (connected && token == connectionToken) {
-                                                controllerPad.setConnectionStatus(true, displayHost, "125Hz UDP");
+                                                controllerPad.setConnectionStatus(true, displayHost, "250Hz UDP");
                                             }
                                         });
                                     }
@@ -765,13 +859,18 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 readerThread.start();
 
                 StringBuilder packetBuf = new StringBuilder(384);
+                byte[] udpBuf = new byte[68];
+                ByteBuffer udpBb = ByteBuffer.wrap(udpBuf).order(ByteOrder.BIG_ENDIAN);
+                DatagramPacket udpDgram = new DatagramPacket(udpBuf, udpBuf.length);
                 long connectedAtMs = SystemClock.elapsedRealtime();
                 long lastTcpKeepaliveMs = connectedAtMs;
                 long lastUdpProbeMs = 0L;
-                String prevSignature = "";
 
                 while (desiredConnected && connected && tcpAlive && token == connectionToken && !candidate.isClosed()) {
+                    boolean hadUrgent;
                     synchronized (sendLock) {
+                        hadUrgent = urgentEdgePending;
+                        urgentEdgePending = false;
                         sendPending = false;
                     }
                     long sentAtNs = System.nanoTime();
@@ -781,19 +880,20 @@ public final class MainActivity extends Activity implements SensorEventListener,
                         throw new IOException("Connection lost (heartbeat timeout)");
                     }
 
-                    String jsonLine = buildInputJson(packetBuf, false);
-                    boolean stateChanged = !jsonLine.equals(prevSignature);
-                    prevSignature = jsonLine;
-                    boolean activeInput = stateChanged || isAnyControlActive();
+                    boolean activeInput = hadUrgent || isAnyControlActive();
 
                     if (udpAcked && candidateUdp != null) {
-                        String udpLine = buildInputJson(packetBuf, true);
-                        byte[] bytes = udpLine.getBytes(StandardCharsets.UTF_8);
                         try {
-                            candidateUdp.send(new DatagramPacket(bytes, bytes.length));
+                            if (sessionBytes != null) {
+                                packBinaryUdp(udpBb);
+                                candidateUdp.send(udpDgram);
+                            } else {
+                                byte[] bytes = buildInputJson(packetBuf, true).getBytes(StandardCharsets.UTF_8);
+                                candidateUdp.send(new DatagramPacket(bytes, bytes.length));
+                            }
                         } catch (IOException udpErr) {
                             udpAcked = false;
-                            if (!sendTcpLine(output, jsonLine)) {
+                            if (!sendTcpLine(output, buildInputJson(packetBuf, false))) {
                                 throw new IOException("Socket disconnected");
                             }
                         }
@@ -804,15 +904,19 @@ public final class MainActivity extends Activity implements SensorEventListener,
                             lastTcpKeepaliveMs = nowMs;
                         }
                     } else {
-                        if (candidateUdp != null && !sessionToken.isEmpty() && (nowMs - connectedAtMs) < 3000L && (nowMs - lastUdpProbeMs) >= 120L) {
+                        if (candidateUdp != null && !sessionToken.isEmpty() && (nowMs - connectedAtMs) < 3000L && (nowMs - lastUdpProbeMs) >= 100L) {
                             lastUdpProbeMs = nowMs;
-                            String udpLine = buildInputJson(packetBuf, true);
-                            byte[] bytes = udpLine.getBytes(StandardCharsets.UTF_8);
                             try {
-                                candidateUdp.send(new DatagramPacket(bytes, bytes.length));
+                                if (sessionBytes != null) {
+                                    packBinaryUdp(udpBb);
+                                    candidateUdp.send(udpDgram);
+                                } else {
+                                    byte[] bytes = buildInputJson(packetBuf, true).getBytes(StandardCharsets.UTF_8);
+                                    candidateUdp.send(new DatagramPacket(bytes, bytes.length));
+                                }
                             } catch (IOException ignored) {}
                         }
-                        if (!sendTcpLine(output, jsonLine)) {
+                        if (!sendTcpLine(output, buildInputJson(packetBuf, false))) {
                             throw new IOException("Socket disconnected");
                         }
                         lastTcpKeepaliveMs = nowMs;
@@ -823,12 +927,15 @@ public final class MainActivity extends Activity implements SensorEventListener,
                     }
 
                     long elapsedMs = (System.nanoTime() - sentAtNs) / 1_000_000L;
-                    long targetPeriod = activeInput ? 8L : 40L;
-                    long minWait = activeInput ? 4L : 8L;
-                    long waitMs = Math.max(minWait, targetPeriod - elapsedMs);
+                    long targetPeriod = activeInput ? 4L : 20L;
+                    long waitMs = Math.max(1L, targetPeriod - elapsedMs);
                     synchronized (sendLock) {
-                        if (!sendPending && desiredConnected && connected && tcpAlive && token == connectionToken) {
-                            sendLock.wait(waitMs);
+                        if (!urgentEdgePending && desiredConnected && connected && tcpAlive && token == connectionToken) {
+                            if (!sendPending) {
+                                sendLock.wait(waitMs);
+                            } else if (elapsedMs < 2L) {
+                                sendLock.wait(2L - elapsedMs);
+                            }
                         }
                     }
                 }
@@ -917,6 +1024,64 @@ public final class MainActivity extends Activity implements SensorEventListener,
             if (current[i]) return true;
         }
         return false;
+    }
+
+    private static byte[] parseHexBytes(String hex) {
+        if (hex == null || hex.length() != 16) return null;
+        byte[] out = new byte[8];
+        try {
+            for (int i = 0; i < 8; i++) {
+                int hi = Character.digit(hex.charAt(i * 2), 16);
+                int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+                if (hi < 0 || lo < 0) return null;
+                out[i] = (byte) ((hi << 4) | lo);
+            }
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void packBinaryUdp(ByteBuffer bb) {
+        String mode = currentModeName;
+        boolean wheelControlled = touchingWheel || !gyroEnabled;
+        float steer = finite(wheelControlled ? touchSteer : gyroSteer);
+        float steerDeg = Math.round(steer * wheelMaxDeg * 10f) / 10f;
+        float outLx = ("gamepad".equals(mode) && gyroEnabled && !touchingLeftStick && !touchingWheel)
+                ? steer
+                : ("gamepad".equals(mode) && touchingWheel ? steer : lx);
+
+        int dpadMask = (dpadUp ? 1 : 0)
+                | (dpadDown ? 2 : 0)
+                | (dpadLeft ? 4 : 0)
+                | (dpadRight ? 8 : 0);
+        int btnMask = 0;
+        boolean[] current = buttons;
+        for (int i = 0; i < 16; i++) {
+            if (i < current.length && current[i]) {
+                btnMask |= (1 << i);
+            }
+        }
+
+        bb.clear();
+        bb.put((byte) 'P').put((byte) 'C').put((byte) 'U').put((byte) '1');
+        bb.put(sessionBytes, 0, 8);
+        bb.putInt((int) (++udpSeq));
+        bb.put((byte) ("gamepad".equals(mode) ? 1 : 0));
+        bb.putFloat(steer);
+        bb.putFloat(steerDeg);
+        bb.putFloat(finite(throttle));
+        bb.putFloat(finite(brake));
+        bb.putFloat(finite(clutch));
+        bb.putFloat(finite(handbrake));
+        bb.putFloat(finite(outLx));
+        bb.putFloat(finite(ly));
+        bb.putFloat(finite(rx));
+        bb.putFloat(finite(ry));
+        bb.putFloat(finite(lt));
+        bb.putFloat(finite(rt));
+        bb.put((byte) dpadMask);
+        bb.putShort((short) btnMask);
     }
 
     private String buildInputJson(StringBuilder sb, boolean withUdpHeader) {
@@ -1263,17 +1428,23 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 : Math.max(0.001f, Math.min(0.05f, (event.timestamp - lastSensorTimestampNs) * 1e-9f));
         lastSensorTimestampNs = event.timestamp;
 
-        // Tuned velocity-adaptive One-Euro filter: zero noticeable phase lag, rock-solid center stability.
+        int profile = responseProfile;
+        float speedFilterHz = profile == PROFILE_F1 ? 24f : (profile == PROFILE_BALANCED ? 16f : 12f);
+        float minCutoffHz = profile == PROFILE_F1 ? 22f : (profile == PROFILE_BALANCED ? 11f : 6f);
+        float slope = profile == PROFILE_F1 ? 0.55f : (profile == PROFILE_BALANCED ? 0.28f : 0.16f);
+        float maxExtraHz = profile == PROFILE_F1 ? 63f : (profile == PROFILE_BALANCED ? 37f : 24f);
+        float deadDeg = profile == PROFILE_F1 ? 0.35f : (profile == PROFILE_BALANCED ? 0.8f : 1.3f);
+        float notifyStep = profile == PROFILE_F1 ? 0.0004f : (profile == PROFILE_BALANCED ? 0.0010f : 0.0015f);
+
         float instSpeed = Math.abs(targetDeg - prevTargetDeg) / dt;
         prevTargetDeg = targetDeg;
-        float speedAlpha = 1f - (float) Math.exp(-TWO_PI * 14f * dt);
+        float speedAlpha = 1f - (float) Math.exp(-TWO_PI * speedFilterHz * dt);
         angularSpeedDegSec += (instSpeed - angularSpeedDegSec) * speedAlpha;
 
-        float cutoffHz = 9.0f + Math.min(34f, angularSpeedDegSec * 0.24f);
+        float cutoffHz = minCutoffHz + Math.min(maxExtraHz, angularSpeedDegSec * slope);
         float smoothAlpha = 1f - (float) Math.exp(-TWO_PI * cutoffHz * dt);
         smoothedWheelDeg += (targetDeg - smoothedWheelDeg) * smoothAlpha;
 
-        float deadDeg = 1.0f;
         float absDeg = Math.abs(smoothedWheelDeg);
         float effectiveDeg = absDeg <= deadDeg
                 ? 0f
@@ -1283,7 +1454,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 );
 
         gyroSteer = finite(effectiveDeg / wheelMaxDeg);
-        if (Math.abs(gyroSteer - lastNotifiedGyroSteer) >= 0.0015f || (gyroSteer == 0f && lastNotifiedGyroSteer != 0f)) {
+        if (Math.abs(gyroSteer - lastNotifiedGyroSteer) >= notifyStep || (gyroSteer == 0f && lastNotifiedGyroSteer != 0f)) {
             lastNotifiedGyroSteer = gyroSteer;
             synchronized (sendLock) {
                 sendPending = true;
