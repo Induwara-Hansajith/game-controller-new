@@ -63,6 +63,9 @@ public final class ControllerPad extends View {
     private float displayWheelDeg = 0f;
     private long lastAnimNs = 0L;
     private int steerPointerId = MotionEvent.INVALID_POINTER_ID;
+    private int leftStickPointerId = MotionEvent.INVALID_POINTER_ID;
+    private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
+    private boolean blendingFromTouch = false;
     private float lastTouchAngleDeg = 0f;
     private float lastTouchX = 0f;
     private boolean hitFullLockHaptic = false;
@@ -151,6 +154,7 @@ public final class ControllerPad extends View {
         displayWheelDeg = 0f;
         steer = 0f;
         steeringTouch = false;
+        blendingFromTouch = false;
         steerPointerId = MotionEvent.INVALID_POINTER_ID;
         lastAnimNs = 0L;
         if (currentMode == MODE_GAMEPAD && !leftStickTouched) {
@@ -162,6 +166,9 @@ public final class ControllerPad extends View {
     public void setDisplayedGyroSteer(float gyroVal) {
         this.sensorSteer = clamp(gyroVal, -1f, 1f);
         if (!steeringTouch && gyroEnabled) {
+            if (!blendingFromTouch) {
+                displayWheelDeg = this.sensorSteer * wheelMaxDeg;
+            }
             this.steer = this.sensorSteer;
             if (currentMode == MODE_GAMEPAD && !leftStickTouched) {
                 this.lx = this.steer;
@@ -227,19 +234,32 @@ public final class ControllerPad extends View {
 
     private void drawRacepad(Canvas canvas, float w, float h) {
         float topY = dp(48);
-
-        // --- PADDLES: GEAR DOWN (LB / btn 4 & PADDLE_L / btn 11) & GEAR UP (RB / btn 5 & PADDLE_R / btn 12) ---
-        float paddleW = w * 0.22f;
         float paddleH = dp(34);
-        boolean gearDown = displayedButtons[4] || displayedButtons[11];
-        rectTmp.set(dp(12), topY, dp(12) + paddleW, topY + paddleH);
-        drawPill(canvas, rectTmp, gearDown ? COLOR_ACCENT : COLOR_PANEL, gearDown ? 0xffffffff : COLOR_PANEL_BORDER);
-        drawText(canvas, "◀ GEAR DOWN (LB)", dp(12) + paddleW / 2f, topY + paddleH / 2f + dp(3.5f), 10.5f, gearDown ? 0xffffffff : 0xffc4b5fd, Paint.Align.CENTER, true);
 
-        boolean gearUp = displayedButtons[5] || displayedButtons[12];
-        rectTmp.set(w - dp(12) - paddleW, topY, w - dp(12), topY + paddleH);
+        // --- TOP PADDLES: GEAR DOWN(4) & GEAR UP(5), plus separated CAM(6) & MAP(7) ---
+        float downW = w * 0.19f;
+        boolean gearDown = displayedButtons[4];
+        rectTmp.set(dp(12), topY, dp(12) + downW, topY + paddleH);
+        drawPill(canvas, rectTmp, gearDown ? COLOR_ACCENT : COLOR_PANEL, gearDown ? 0xffffffff : COLOR_PANEL_BORDER);
+        drawText(canvas, "◀ GEAR DOWN", dp(12) + downW / 2f, topY + paddleH / 2f + dp(3.5f), 10f, gearDown ? 0xffffffff : 0xffc4b5fd, Paint.Align.CENTER, true);
+
+        float camAvail = w * 0.44f - (dp(12) + downW + dp(18));
+        float camW = clamp(camAvail / 2f, dp(36), dp(50));
+        float camL = dp(12) + downW + dp(8);
+        rectTmp.set(camL, topY + dp(2), camL + camW, topY + dp(32));
+        drawPill(canvas, rectTmp, displayedButtons[6] ? COLOR_ACCENT : COLOR_PANEL, displayedButtons[6] ? 0xffffffff : COLOR_PANEL_BORDER);
+        drawText(canvas, "CAM", rectTmp.centerX(), topY + dp(20), 9f, 0xffcbd5e1, Paint.Align.CENTER, true);
+
+        float mapL = camL + camW + dp(6);
+        rectTmp.set(mapL, topY + dp(2), mapL + camW, topY + dp(32));
+        drawPill(canvas, rectTmp, displayedButtons[7] ? COLOR_ACCENT : COLOR_PANEL, displayedButtons[7] ? 0xffffffff : COLOR_PANEL_BORDER);
+        drawText(canvas, "MAP", rectTmp.centerX(), topY + dp(20), 9f, 0xffcbd5e1, Paint.Align.CENTER, true);
+
+        float upW = w * 0.21f;
+        boolean gearUp = displayedButtons[5];
+        rectTmp.set(w - dp(12) - upW, topY, w - dp(12), topY + paddleH);
         drawPill(canvas, rectTmp, gearUp ? COLOR_ACCENT : COLOR_PANEL, gearUp ? 0xffffffff : COLOR_PANEL_BORDER);
-        drawText(canvas, "GEAR UP ▶ (RB)", w - dp(12) - paddleW / 2f, topY + paddleH / 2f + dp(3.5f), 10.5f, gearUp ? 0xffffffff : 0xffc4b5fd, Paint.Align.CENTER, true);
+        drawText(canvas, "GEAR UP ▶", w - dp(12) - upW / 2f, topY + paddleH / 2f + dp(3.5f), 10f, gearUp ? 0xffffffff : 0xffc4b5fd, Paint.Align.CENTER, true);
 
         // --- STEERING WHEEL & ARC GAUGE ---
         updateSteeringAnimation();
@@ -248,11 +268,11 @@ public final class ControllerPad extends View {
         float radius = wheelRadius(w, h);
         drawSteeringGauge(canvas, cx, cy, radius);
 
-        // 4 Simulator Quick Toggles under Wheel: LIGHTS(8), HORN(9), WIPERS(13), IGNITION(12)
+        // 4 Simulator Quick Toggles under Wheel: LIGHTS(10), HORN(9), WIPERS(11), IGN(12)
         float subRowY = h - dp(32);
         float subW = (w * 0.44f - dp(24)) / 4f;
         String[] simLabels = {"LIGHTS", "HORN", "WIPERS", "IGN"};
-        int[] simIndices = {8, 9, 13, 12};
+        int[] simIndices = {10, 9, 11, 12};
         for (int i = 0; i < 4; i++) {
             float sx = dp(12) + i * (subW + dp(4));
             rectTmp.set(sx, subRowY, sx + subW, subRowY + dp(26));
@@ -266,17 +286,14 @@ public final class ControllerPad extends View {
         float pedalBottom = h - dp(42);
         float pedalW = w * 0.082f;
 
-        // Clutch Pedal (Amber gradient)
         float clutchL = w * 0.47f;
         float clutchR = clutchL + pedalW;
         drawPedal(canvas, clutchL, clutchR, pedalTop, pedalBottom, "CLUTCH", clutch, COLOR_CLUTCH, 0xffb45309);
 
-        // Brake Pedal (Rose gradient)
         float brakeL = clutchR + dp(10);
         float brakeR = brakeL + pedalW;
         drawPedal(canvas, brakeL, brakeR, pedalTop, pedalBottom, "BRAKE", brake, COLOR_BRAKE, 0xffbe123c);
 
-        // Gas / Throttle Pedal (Emerald gradient)
         float gasL = brakeR + dp(10);
         float gasR = gasL + pedalW;
         drawPedal(canvas, gasL, gasR, pedalTop, pedalBottom, "GAS", throttle, COLOR_THROTTLE, 0xff047857);
@@ -293,38 +310,26 @@ public final class ControllerPad extends View {
             drawText(canvas, pbLabels[i], px + pbSubW / 2f, subRowY + dp(16), 8f, active ? 0xffffffff : 0xfffda4af, Paint.Align.CENTER, true);
         }
 
-        // --- RIGHT CLUSTER: ACTION BUTTONS (A, B, X, Y) + CAM(6) / MAP(7) ---
-        float diamondCx = w * 0.88f;
-        float diamondCy = cy;
-        float btnRadius = Math.min(w * 0.048f, h * 0.085f);
-        float offset = btnRadius * 1.35f;
+        // --- RIGHT CLUSTER: ACTION BUTTONS (A, B, X, Y) + MINI D-PAD ---
+        float diamondCx = raceDiamondCx(w);
+        float diamondCy = raceDiamondCy(h);
+        float btnRadius = raceBtnRadius(w, h);
+        float offset = btnRadius * 1.42f;
 
         drawCircleButton(canvas, diamondCx, diamondCy - offset, btnRadius, "Y", 3, 0xfff59e0b);
         drawCircleButton(canvas, diamondCx - offset, diamondCy, btnRadius, "X", 2, 0xff06b6d4);
         drawCircleButton(canvas, diamondCx + offset, diamondCy, btnRadius, "B", 1, 0xfff43f5e);
         drawCircleButton(canvas, diamondCx, diamondCy + offset, btnRadius, "A", 0, 0xff10b981);
 
-        // Cam and Map pills above action buttons
-        float camW = dp(46);
-        rectTmp.set(diamondCx - camW - dp(4), topY + dp(4), diamondCx - dp(4), topY + dp(30));
-        drawPill(canvas, rectTmp, displayedButtons[6] ? COLOR_ACCENT : COLOR_PANEL, COLOR_PANEL_BORDER);
-        drawText(canvas, "CAM", diamondCx - camW / 2f - dp(4), topY + dp(20), 9f, 0xffcbd5e1, Paint.Align.CENTER, true);
-
-        rectTmp.set(diamondCx + dp(4), topY + dp(4), diamondCx + camW + dp(4), topY + dp(30));
-        drawPill(canvas, rectTmp, displayedButtons[7] ? COLOR_ACCENT : COLOR_PANEL, COLOR_PANEL_BORDER);
-        drawText(canvas, "MAP", diamondCx + camW / 2f + dp(4), topY + dp(20), 9f, 0xffcbd5e1, Paint.Align.CENTER, true);
-
-        // Mini D-Pad for menus below diamond
-        drawMiniDpad(canvas, diamondCx, h - dp(24), dp(18));
+        drawMiniDpad(canvas, diamondCx, h - dp(24), dp(17));
     }
 
     private void drawGamepad(Canvas canvas, float w, float h) {
         float topY = dp(48);
-
-        // --- SHOULDER TRIGGERS & BUMPERS ---
-        // Left: LB & LT
         float shoulderW = w * 0.17f;
         float shoulderH = dp(32);
+
+        // --- SHOULDER TRIGGERS & BUMPERS ---
         boolean lb = displayedButtons[4];
         rectTmp.set(dp(16), topY, dp(16) + shoulderW, topY + shoulderH);
         drawPill(canvas, rectTmp, lb ? COLOR_ACCENT : COLOR_PANEL, lb ? 0xffffffff : COLOR_PANEL_BORDER);
@@ -334,7 +339,6 @@ public final class ControllerPad extends View {
         float ltLeft = dp(16) + shoulderW + dp(8);
         drawTriggerPill(canvas, ltLeft, topY, ltLeft + triggerW, topY + shoulderH, "LT", lt, COLOR_BRAKE);
 
-        // Right: RB & RT
         boolean rb = displayedButtons[5];
         float rbLeft = w - dp(16) - shoulderW;
         rectTmp.set(rbLeft, topY, w - dp(16), topY + shoulderH);
@@ -345,52 +349,45 @@ public final class ControllerPad extends View {
         drawTriggerPill(canvas, rtRight - triggerW, topY, rtRight, topY + shoulderH, "RT", rt, COLOR_THROTTLE);
 
         // --- LEFT THUMBSTICK (LX, LY) ---
-        float stickR = Math.min(w * 0.11f, h * 0.22f);
-        float stickCx = w * 0.22f;
-        float stickCy = (h + topY) / 2f - dp(10);
+        float stickR = gpStickRadius(w, h);
+        float stickCx = gpLeftStickCx(w);
+        float stickCy = gpLeftStickCy(w, h);
         drawStick(canvas, stickCx, stickCy, stickR, lx, ly, "LEFT STICK (L3)", displayedButtons[9]);
 
-        // Left D-Pad below Stick
-        float dpadCx = stickCx;
-        float dpadCy = h - dp(40);
-        drawMiniDpad(canvas, dpadCx, dpadCy, dp(26));
+        // --- LEFT D-PAD (clearly below Left Stick) ---
+        drawMiniDpad(canvas, gpDpadCx(w), gpDpadCy(h), gpDpadSpan(h));
 
-        // --- CENTER BUTTONS: BACK (6), GUIDE (8), START (7) ---
-        float centerW = dp(54);
+        // --- CENTER BUTTONS: BACK (6), GUIDE (8), START (7) (above Right Stick) ---
+        float centerW = dp(52);
         float centerH = dp(28);
-        float cyCenter = (h + topY) / 2f;
+        float cyCenter = gpCenterButtonsY(h);
 
-        // Back / View (6)
-        rectTmp.set(w / 2f - centerW * 1.5f - dp(8), cyCenter - centerH / 2f, w / 2f - centerW * 0.5f - dp(8), cyCenter + centerH / 2f);
-        drawPill(canvas, rectTmp, displayedButtons[6] ? COLOR_ACCENT : COLOR_PANEL, COLOR_PANEL_BORDER);
+        rectTmp.set(w / 2f - centerW - dp(24), cyCenter - centerH / 2f, w / 2f - dp(24), cyCenter + centerH / 2f);
+        drawPill(canvas, rectTmp, displayedButtons[6] ? COLOR_ACCENT : COLOR_PANEL, displayedButtons[6] ? 0xffffffff : COLOR_PANEL_BORDER);
         drawText(canvas, "VIEW", rectTmp.centerX(), rectTmp.centerY() + dp(3.5f), 9.5f, 0xffcbd5e1, Paint.Align.CENTER, true);
 
-        // Guide / Home (8)
         float guideR = dp(16);
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(displayedButtons[8] ? 0xff10b981 : COLOR_PANEL);
         canvas.drawCircle(w / 2f, cyCenter, guideR, paint);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setColor(COLOR_PANEL_BORDER);
+        paint.setColor(displayedButtons[8] ? 0xffffffff : COLOR_PANEL_BORDER);
         paint.setStrokeWidth(dp(1.5f));
         canvas.drawCircle(w / 2f, cyCenter, guideR, paint);
         drawText(canvas, "⌁", w / 2f, cyCenter + dp(5), 14f, 0xffa78bfa, Paint.Align.CENTER, true);
 
-        // Start / Menu (7)
-        rectTmp.set(w / 2f + centerW * 0.5f + dp(8), cyCenter - centerH / 2f, w / 2f + centerW * 1.5f + dp(8), cyCenter + centerH / 2f);
-        drawPill(canvas, rectTmp, displayedButtons[7] ? COLOR_ACCENT : COLOR_PANEL, COLOR_PANEL_BORDER);
+        rectTmp.set(w / 2f + dp(24), cyCenter - centerH / 2f, w / 2f + centerW + dp(24), cyCenter + centerH / 2f);
+        drawPill(canvas, rectTmp, displayedButtons[7] ? COLOR_ACCENT : COLOR_PANEL, displayedButtons[7] ? 0xffffffff : COLOR_PANEL_BORDER);
         drawText(canvas, "MENU", rectTmp.centerX(), rectTmp.centerY() + dp(3.5f), 9.5f, 0xffcbd5e1, Paint.Align.CENTER, true);
 
         // --- RIGHT THUMBSTICK (RX, RY) ---
-        float rStickCx = w * 0.65f;
-        float rStickCy = h - dp(56);
-        drawStick(canvas, rStickCx, rStickCy, stickR * 0.85f, rx, ry, "RIGHT STICK (R3)", displayedButtons[10]);
+        drawStick(canvas, gpRightStickCx(w), gpRightStickCy(w, h), gpRightStickRadius(w, h), rx, ry, "RIGHT STICK (R3)", displayedButtons[10]);
 
         // --- ABXY DIAMOND CLUSTER ---
-        float diamondCx = w * 0.84f;
-        float diamondCy = (h + topY) / 2f - dp(18);
-        float btnRadius = Math.min(w * 0.052f, h * 0.09f);
-        float offset = btnRadius * 1.35f;
+        float diamondCx = gpDiamondCx(w);
+        float diamondCy = gpDiamondCy(h);
+        float btnRadius = gpBtnRadius(w, h);
+        float offset = btnRadius * 1.42f;
 
         drawCircleButton(canvas, diamondCx, diamondCy - offset, btnRadius, "Y", 3, 0xfff59e0b);
         drawCircleButton(canvas, diamondCx - offset, diamondCy, btnRadius, "X", 2, 0xff06b6d4);
@@ -477,13 +474,79 @@ public final class ControllerPad extends View {
     private float wheelCy(float h) {
         float topY = dp(48);
         float paddleH = dp(34);
-        return (h + topY + paddleH) / 2f - dp(16);
+        return (h + topY + paddleH) / 2f - dp(20);
     }
 
     private float wheelRadius(float w, float h) {
         float topY = dp(48);
         float paddleH = dp(34);
-        return Math.min(w * 0.19f, (h - topY - paddleH) * 0.40f);
+        return Math.min(w * 0.18f, (h - topY - paddleH) * 0.37f);
+    }
+
+    private float raceDiamondCx(float w) {
+        return w * 0.88f;
+    }
+
+    private float raceDiamondCy(float h) {
+        float topBottom = dp(48) + dp(34);
+        float bottomLimit = h - dp(48);
+        return topBottom + (bottomLimit - topBottom) * 0.46f;
+    }
+
+    private float raceBtnRadius(float w, float h) {
+        return Math.min(w * 0.044f, h * 0.078f);
+    }
+
+    private float gpStickRadius(float w, float h) {
+        return Math.min(w * 0.092f, h * 0.175f);
+    }
+
+    private float gpLeftStickCx(float w) {
+        return w * 0.19f;
+    }
+
+    private float gpLeftStickCy(float w, float h) {
+        return dp(80) + dp(10) + gpStickRadius(w, h);
+    }
+
+    private float gpDpadSpan(float h) {
+        return Math.min(dp(23), h * 0.066f);
+    }
+
+    private float gpDpadCx(float w) {
+        return gpLeftStickCx(w);
+    }
+
+    private float gpDpadCy(float h) {
+        return h - dp(34);
+    }
+
+    private float gpCenterButtonsY(float h) {
+        return dp(80) + dp(38);
+    }
+
+    private float gpRightStickRadius(float w, float h) {
+        return gpStickRadius(w, h) * 0.90f;
+    }
+
+    private float gpRightStickCx(float w) {
+        return w * 0.62f;
+    }
+
+    private float gpRightStickCy(float w, float h) {
+        return h - dp(20) - gpRightStickRadius(w, h);
+    }
+
+    private float gpDiamondCx(float w) {
+        return w * 0.855f;
+    }
+
+    private float gpDiamondCy(float h) {
+        return dp(80) + (h - dp(80)) * 0.48f;
+    }
+
+    private float gpBtnRadius(float w, float h) {
+        return Math.min(w * 0.046f, h * 0.082f);
     }
 
     private void updateSteeringAnimation() {
@@ -498,16 +561,19 @@ public final class ControllerPad extends View {
 
         if (gyroEnabled) {
             float targetDeg = clamp(sensorSteer, -1f, 1f) * wheelMaxDeg;
-            float diff = targetDeg - displayWheelDeg;
-            if (Math.abs(diff) > 0.18f) {
-                float k = 1f - (float) Math.exp(-dt * 28f);
-                displayWheelDeg += diff * k;
-                this.steer = clamp(displayWheelDeg / wheelMaxDeg, -1f, 1f);
-                postInvalidateOnAnimation();
-            } else {
-                displayWheelDeg = targetDeg;
-                this.steer = clamp(sensorSteer, -1f, 1f);
+            if (blendingFromTouch) {
+                float diff = targetDeg - displayWheelDeg;
+                if (Math.abs(diff) > 0.35f) {
+                    float k = 1f - (float) Math.exp(-dt * 26f);
+                    displayWheelDeg += diff * k;
+                    this.steer = clamp(displayWheelDeg / wheelMaxDeg, -1f, 1f);
+                    postInvalidateOnAnimation();
+                    return;
+                }
+                blendingFromTouch = false;
             }
+            displayWheelDeg = targetDeg;
+            this.steer = clamp(sensorSteer, -1f, 1f);
             return;
         }
 
@@ -776,10 +842,11 @@ public final class ControllerPad extends View {
             return true;
         }
 
-        // Single-tap triggers for HUD top bar & claim steering wheel finger
+        // Single-tap triggers for HUD top bar & claim dedicated wheel/stick fingers
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             float tx = event.getX(actionIndex);
             float ty = event.getY(actionIndex);
+            int downId = event.getPointerId(actionIndex);
             if (ty <= dp(44)) {
                 handleHudTouch(tx, ty, w);
                 return true;
@@ -788,22 +855,41 @@ public final class ControllerPad extends View {
                 float cx = wheelCx(w);
                 float cy = wheelCy(h);
                 float radius = wheelRadius(w, h);
-                if (tx < w * 0.44f && ty < h - dp(40) && Math.hypot(tx - cx, ty - cy) <= radius * 1.42f) {
-                    steerPointerId = event.getPointerId(actionIndex);
+                if (tx < w * 0.44f && ty > dp(82) && ty < h - dp(38) && Math.hypot(tx - cx, ty - cy) <= radius * 1.38f) {
+                    steerPointerId = downId;
                     steeringTouch = true;
+                    blendingFromTouch = false;
                     touchWheelDeg = displayWheelDeg;
                     lastTouchAngleDeg = (float) Math.toDegrees(Math.atan2(ty - cy, tx - cx));
                     lastTouchX = tx;
                     hitFullLockHaptic = Math.abs(touchWheelDeg) >= wheelMaxDeg - 0.5f;
                     lastAnimNs = 0L;
                 }
+            } else if (currentMode == MODE_GAMEPAD && ty > dp(82)) {
+                float lR = gpStickRadius(w, h);
+                float lCx = gpLeftStickCx(w);
+                float lCy = gpLeftStickCy(w, h);
+                float rR = gpRightStickRadius(w, h);
+                float rCx = gpRightStickCx(w);
+                float rCy = gpRightStickCy(w, h);
+                if (leftStickPointerId == MotionEvent.INVALID_POINTER_ID && Math.hypot(tx - lCx, ty - lCy) <= lR * 1.22f) {
+                    leftStickPointerId = downId;
+                } else if (rightStickPointerId == MotionEvent.INVALID_POINTER_ID && Math.hypot(tx - rCx, ty - rCy) <= rR * 1.22f) {
+                    rightStickPointerId = downId;
+                }
             }
         }
 
         boolean lifted = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP;
         int liftedIndex = event.getActionIndex();
-        if (lifted && event.getPointerId(liftedIndex) == steerPointerId) {
-            steerPointerId = MotionEvent.INVALID_POINTER_ID;
+        if (lifted) {
+            int liftedId = event.getPointerId(liftedIndex);
+            if (liftedId == steerPointerId) {
+                steerPointerId = MotionEvent.INVALID_POINTER_ID;
+                blendingFromTouch = true;
+            }
+            if (liftedId == leftStickPointerId) leftStickPointerId = MotionEvent.INVALID_POINTER_ID;
+            if (liftedId == rightStickPointerId) rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
         }
 
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN || action == MotionEvent.ACTION_MOVE || lifted) {
@@ -868,43 +954,36 @@ public final class ControllerPad extends View {
                 if (y <= dp(44)) continue;
 
                 if (currentMode == MODE_RACEPAD) {
-                    // Paddles: Gear Down (LB: 4 & PADDLE_L: 11), Gear Up (RB: 5 & PADDLE_R: 12)
-                    float paddleW = w * 0.22f;
-                    float paddleH = dp(38);
-                    if (y >= dp(48) && y <= dp(48) + paddleH) {
-                        if (x <= dp(12) + paddleW) {
+                    // Top Row: Gear Down(4), CAM(6), MAP(7), Gear Up(5) — strictly separated
+                    float downW = w * 0.19f;
+                    float upW = w * 0.21f;
+                    float camAvail = w * 0.44f - (dp(12) + downW + dp(18));
+                    float camW = clamp(camAvail / 2f, dp(36), dp(50));
+                    float camL = dp(12) + downW + dp(8);
+                    float mapL = camL + camW + dp(6);
+                    if (y >= dp(46) && y <= dp(84)) {
+                        if (x <= dp(12) + downW + dp(2)) {
                             nextButtons[4] = true;
-                            nextButtons[11] = true;
                             continue;
-                        } else if (x >= w - dp(12) - paddleW) {
-                            nextButtons[5] = true;
-                            nextButtons[12] = true;
-                            continue;
-                        }
-                    }
-
-                    // Cam(6) / Map(7)
-                    float diamondCx = w * 0.88f;
-                    float camW = dp(46);
-                    if (y >= dp(48) && y <= dp(48) + dp(32)) {
-                        if (x >= diamondCx - camW - dp(8) && x <= diamondCx) {
+                        } else if (x >= camL - dp(2) && x <= camL + camW + dp(2)) {
                             nextButtons[6] = true;
                             continue;
-                        } else if (x >= diamondCx && x <= diamondCx + camW + dp(8)) {
+                        } else if (x >= mapL - dp(2) && x <= mapL + camW + dp(2)) {
                             nextButtons[7] = true;
+                            continue;
+                        } else if (x >= w - dp(12) - upW - dp(2)) {
+                            nextButtons[5] = true;
                             continue;
                         }
                     }
 
-                    // Wheel touches are tracked by steerPointerId above.
-
-                    // Sub-toggles under Wheel: LIGHTS(8), HORN(9), WIPERS(13), IGN(12)
+                    // Sub-toggles under Wheel: LIGHTS(10), HORN(9), WIPERS(11), IGN(12)
                     if (y >= h - dp(36) && x <= w * 0.44f) {
                         float subW = (w * 0.44f - dp(24)) / 4f;
-                        int[] simIndices = {8, 9, 13, 12};
+                        int[] simIndices = {10, 9, 11, 12};
                         for (int s = 0; s < 4; s++) {
                             float sx = dp(12) + s * (subW + dp(4));
-                            if (x >= sx && x <= sx + subW) {
+                            if (x >= sx - dp(1) && x <= sx + subW + dp(1)) {
                                 nextButtons[simIndices[s]] = true;
                                 break;
                             }
@@ -912,7 +991,7 @@ public final class ControllerPad extends View {
                         continue;
                     }
 
-                    // Pedals: Clutch, Brake, Gas
+                    // Pedals: Clutch, Brake, Gas (fine control down to 4%)
                     float pedalTop = dp(48) + dp(8);
                     float pedalBottom = h - dp(42);
                     float pedalW = w * 0.082f;
@@ -923,15 +1002,15 @@ public final class ControllerPad extends View {
                     float gasL = brakeR + dp(10);
                     float gasR = gasL + pedalW;
 
-                    if (y >= pedalTop - dp(8) && y <= pedalBottom + dp(8)) {
-                        if (x >= clutchL - dp(6) && x <= clutchR + dp(6)) {
-                            nextClutch = Math.max(nextClutch, clamp((pedalBottom - y) / (pedalBottom - pedalTop), 0.2f, 1.0f));
+                    if (y >= pedalTop - dp(6) && y <= pedalBottom + dp(4)) {
+                        if (x >= clutchL - dp(4) && x <= clutchR + dp(4)) {
+                            nextClutch = Math.max(nextClutch, clamp((pedalBottom - y) / (pedalBottom - pedalTop), 0.04f, 1.0f));
                             continue;
-                        } else if (x >= brakeL - dp(6) && x <= brakeR + dp(6)) {
-                            nextBrake = Math.max(nextBrake, clamp((pedalBottom - y) / (pedalBottom - pedalTop), 0.2f, 1.0f));
+                        } else if (x >= brakeL - dp(4) && x <= brakeR + dp(4)) {
+                            nextBrake = Math.max(nextBrake, clamp((pedalBottom - y) / (pedalBottom - pedalTop), 0.04f, 1.0f));
                             continue;
-                        } else if (x >= gasL - dp(6) && x <= gasR + dp(6)) {
-                            nextThrottle = Math.max(nextThrottle, clamp((pedalBottom - y) / (pedalBottom - pedalTop), 0.2f, 1.0f));
+                        } else if (x >= gasL - dp(4) && x <= gasR + dp(4)) {
+                            nextThrottle = Math.max(nextThrottle, clamp((pedalBottom - y) / (pedalBottom - pedalTop), 0.04f, 1.0f));
                             continue;
                         }
                     }
@@ -942,7 +1021,7 @@ public final class ControllerPad extends View {
                         int[] pbIndices = {15, 13, 14, 8};
                         for (int p = 0; p < 4; p++) {
                             float px = clutchL + p * (pbSubW + dp(3));
-                            if (x >= px && x <= px + pbSubW) {
+                            if (x >= px - dp(1) && x <= px + pbSubW + dp(1)) {
                                 nextButtons[pbIndices[p]] = true;
                                 if (p == 0) nextHandbrake = 1.0f;
                                 break;
@@ -952,7 +1031,8 @@ public final class ControllerPad extends View {
                     }
 
                     // Mini D-Pad under Diamond
-                    if (y >= h - dp(48) && x >= diamondCx - dp(32) && x <= diamondCx + dp(32)) {
+                    float diamondCx = raceDiamondCx(w);
+                    if (y >= h - dp(44) && x >= diamondCx - dp(26) && x <= diamondCx + dp(26)) {
                         float dy = y - (h - dp(24));
                         float dx = x - diamondCx;
                         if (Math.abs(dy) > Math.abs(dx)) {
@@ -974,30 +1054,11 @@ public final class ControllerPad extends View {
                     float shoulderH = dp(36);
                     float triggerW = w * 0.13f;
 
-                    // LB & LT
-                    if (y >= dp(48) && y <= dp(48) + shoulderH) {
-                        if (x <= dp(16) + shoulderW) {
-                            nextButtons[4] = true; // LB
-                            continue;
-                        } else if (x <= dp(16) + shoulderW + triggerW + dp(8)) {
-                            nextLt = 1.0f; // LT
-                            continue;
-                        } else if (x >= w - dp(16) - shoulderW) {
-                            nextButtons[5] = true; // RB
-                            continue;
-                        } else if (x >= w - dp(16) - shoulderW - triggerW - dp(8)) {
-                            nextRt = 1.0f; // RT
-                            continue;
-                        }
-                    }
-
-                    // Left Stick (LX, LY)
-                    float stickR = Math.min(w * 0.11f, h * 0.22f);
-                    float stickCx = w * 0.22f;
-                    float stickCy = (h + dp(48)) / 2f - dp(10);
-                    float distL = (float) Math.hypot(x - stickCx, y - stickCy);
-                    if (distL <= stickR * 1.35f) {
-                        if (distL <= dp(16)) {
+                    if (pointerId == leftStickPointerId) {
+                        float stickR = gpStickRadius(w, h);
+                        float stickCx = gpLeftStickCx(w);
+                        float stickCy = gpLeftStickCy(w, h);
+                        if (Math.hypot(x - stickCx, y - stickCy) <= dp(14)) {
                             nextButtons[9] = true; // L3 click
                         }
                         nextLeftStickTouch = true;
@@ -1006,11 +1067,40 @@ public final class ControllerPad extends View {
                         continue;
                     }
 
-                    // D-Pad below Left Stick
-                    float dpadCx = stickCx;
-                    float dpadCy = h - dp(40);
-                    float distDpad = (float) Math.hypot(x - dpadCx, y - dpadCy);
-                    if (distDpad <= dp(45)) {
+                    if (pointerId == rightStickPointerId) {
+                        float rStickR = gpRightStickRadius(w, h);
+                        float rStickCx = gpRightStickCx(w);
+                        float rStickCy = gpRightStickCy(w, h);
+                        if (Math.hypot(x - rStickCx, y - rStickCy) <= dp(14)) {
+                            nextButtons[10] = true; // R3 click
+                        }
+                        nextRx = clamp((x - rStickCx) / rStickR, -1f, 1f);
+                        nextRy = clamp((y - rStickCy) / rStickR, -1f, 1f);
+                        continue;
+                    }
+
+                    // LB & LT, RT & RB
+                    if (y >= dp(46) && y <= dp(48) + shoulderH) {
+                        if (x <= dp(16) + shoulderW) {
+                            nextButtons[4] = true;
+                            continue;
+                        } else if (x <= dp(16) + shoulderW + triggerW + dp(8)) {
+                            nextLt = 1.0f;
+                            continue;
+                        } else if (x >= w - dp(16) - shoulderW) {
+                            nextButtons[5] = true;
+                            continue;
+                        } else if (x >= w - dp(16) - shoulderW - triggerW - dp(8)) {
+                            nextRt = 1.0f;
+                            continue;
+                        }
+                    }
+
+                    // D-Pad below Left Stick (separated cleanly from Left Stick)
+                    float dpadCx = gpDpadCx(w);
+                    float dpadCy = gpDpadCy(h);
+                    float dpadSpan = gpDpadSpan(h);
+                    if (Math.hypot(x - dpadCx, y - dpadCy) <= dpadSpan * 1.38f) {
                         float dx = x - dpadCx;
                         float dy = y - dpadCy;
                         if (Math.abs(dx) > Math.abs(dy)) {
@@ -1021,32 +1111,20 @@ public final class ControllerPad extends View {
                         continue;
                     }
 
-                    // Center Buttons: Back/View(6), Guide(8), Start/Menu(7)
-                    float cyCenter = (h + dp(48)) / 2f;
-                    if (Math.abs(y - cyCenter) <= dp(24)) {
-                        if (x >= w / 2f - dp(70) && x <= w / 2f - dp(18)) {
+                    // Center Buttons: VIEW(6), GUIDE(8), MENU(7) (positioned above Right Stick)
+                    float centerW = dp(52);
+                    float cyCenter = gpCenterButtonsY(h);
+                    if (Math.abs(y - cyCenter) <= dp(20)) {
+                        if (x >= w / 2f - centerW - dp(24) && x <= w / 2f - dp(24)) {
                             nextButtons[6] = true;
                             continue;
                         } else if (Math.hypot(x - w / 2f, y - cyCenter) <= dp(18)) {
-                            nextButtons[8] = true; // Guide
+                            nextButtons[8] = true;
                             continue;
-                        } else if (x >= w / 2f + dp(18) && x <= w / 2f + dp(70)) {
+                        } else if (x >= w / 2f + dp(24) && x <= w / 2f + centerW + dp(24)) {
                             nextButtons[7] = true;
                             continue;
                         }
-                    }
-
-                    // Right Stick (RX, RY)
-                    float rStickCx = w * 0.65f;
-                    float rStickCy = h - dp(56);
-                    float distR = (float) Math.hypot(x - rStickCx, y - rStickCy);
-                    if (distR <= stickR * 1.35f) {
-                        if (distR <= dp(16)) {
-                            nextButtons[10] = true; // R3 click
-                        }
-                        nextRx = clamp((x - rStickCx) / (stickR * 0.85f), -1f, 1f);
-                        nextRy = clamp((y - rStickCy) / (stickR * 0.85f), -1f, 1f);
-                        continue;
                     }
 
                     // ABXY Diamond
@@ -1142,10 +1220,10 @@ public final class ControllerPad extends View {
     }
 
     private int hitDiamondButton(float x, float y, float w, float h) {
-        float diamondCx = currentMode == MODE_RACEPAD ? w * 0.88f : w * 0.84f;
-        float cy = currentMode == MODE_RACEPAD ? (h + dp(48) + dp(34)) / 2f - dp(16) : (h + dp(48)) / 2f - dp(18);
-        float btnRadius = Math.min(w * 0.052f, h * 0.09f);
-        float offset = btnRadius * 1.35f;
+        float diamondCx = currentMode == MODE_RACEPAD ? raceDiamondCx(w) : gpDiamondCx(w);
+        float cy = currentMode == MODE_RACEPAD ? raceDiamondCy(h) : gpDiamondCy(h);
+        float btnRadius = currentMode == MODE_RACEPAD ? raceBtnRadius(w, h) : gpBtnRadius(w, h);
+        float offset = btnRadius * 1.42f;
 
         float[][] centers = {
                 {diamondCx, cy + offset}, // A (0)
@@ -1154,15 +1232,19 @@ public final class ControllerPad extends View {
                 {diamondCx, cy - offset}  // Y (3)
         };
 
-        float hitR = btnRadius * 1.35f;
+        float hitR = btnRadius * 1.18f;
+        float bestDistSq = hitR * hitR;
+        int bestIdx = -1;
         for (int i = 0; i < centers.length; i++) {
             float dx = x - centers[i][0];
             float dy = y - centers[i][1];
-            if (dx * dx + dy * dy <= hitR * hitR) {
-                return i;
+            float distSq = dx * dx + dy * dy;
+            if (distSq <= bestDistSq) {
+                bestDistSq = distSq;
+                bestIdx = i;
             }
         }
-        return -1;
+        return bestIdx;
     }
 
     private void triggerHaptic() {
@@ -1214,6 +1296,9 @@ public final class ControllerPad extends View {
         touchWheelDeg = 0f;
         displayWheelDeg = 0f;
         steerPointerId = MotionEvent.INVALID_POINTER_ID;
+        leftStickPointerId = MotionEvent.INVALID_POINTER_ID;
+        rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
+        blendingFromTouch = false;
         lastAnimNs = 0L;
         steeringTouch = false;
         leftStickTouched = false;

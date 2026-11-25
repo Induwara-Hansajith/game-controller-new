@@ -218,7 +218,7 @@
       position: relative;
       display: grid;
       place-items: center;
-      transition: transform 0.08s cubic-bezier(0.1, 0.9, 0.2, 1);
+      transition: transform 0.04s linear;
     }
     .wheel-rim-glow {
       position: absolute;
@@ -410,7 +410,7 @@
       </div>
       <div class="badge-bar">
         <div class="tag">
-          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.3</span>
+          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.4</span>
         </div>
         <div class="tag">
           <span id="dot" class="pulse-dot"></span>
@@ -547,13 +547,13 @@
     </div>
 
     <footer>
-      <span>Pocket Controller v0.1.0-beta.3 · Local TCP Protocol</span>
+      <span>Pocket Controller v0.1.0-beta.4 · Local TCP Protocol</span>
       <span>Low Latency Touch & Tilt Emulation</span>
     </footer>
   </div>
 
   <script>
-    const BTN_LABELS = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'BACK', 'START', 'GUIDE', 'L3', 'R3', 'P-L', 'P-R', 'GEAR+', 'GEAR-', 'AUX'];
+    const BTN_LABELS = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'BACK', 'START', 'PIT', 'HORN', 'LIGHT', 'WIPER', 'IGN', 'NITRO', 'CRUISE', 'H-BRK'];
     const cluster = document.getElementById('buttonCluster');
     const btnElements = BTN_LABELS.map((label, idx) => {
       const el = document.createElement('div');
@@ -674,8 +674,11 @@
       }
     }
 
-    setInterval(poll, 150);
-    poll();
+    async function pollLoop() {
+      await poll();
+      setTimeout(pollLoop, 33);
+    }
+    pollLoop();
   </script>
 </body>
 </html>

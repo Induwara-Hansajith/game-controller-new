@@ -26,7 +26,7 @@ INPUT_HOST, INPUT_PORT = "0.0.0.0", 8766
 DISCOVERY_PORT = 8767
 MAX_LINE_BYTES = 4096
 PAIRING_PIN = f"{secrets.randbelow(1_000_000):06d}"
-VERSION = "0.1.0-beta.3"
+VERSION = "0.1.0-beta.4"
 
 state_lock = threading.Lock()
 shutdown_event = threading.Event()
@@ -139,6 +139,7 @@ def local_ipv4_addresses() -> list[str]:
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/status":
             body = json.dumps(snapshot()).encode("utf-8")
@@ -243,6 +244,12 @@ async def send_json(writer: asyncio.StreamWriter, data: dict) -> None:
 async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, device: ControllerDevice) -> None:
     global active_writer
     peer = writer.get_extra_info("peername")
+    raw_sock = writer.get_extra_info("socket")
+    if raw_sock is not None:
+        try:
+            raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
     phone_name = "Phone"
     authenticated = False
     stale_applied = False

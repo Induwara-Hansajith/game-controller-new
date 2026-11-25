@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-beta.4 - Smoother response & non-overlapping key bindings
+
+### Android mobile app
+
+- Fixed overlapping Racepad button slots: every control (`GEAR DOWN`, `GEAR UP`, `CAM`, `MAP`, `LIGHTS`, `HORN`, `WIPERS`, `IGN`, `HANDBRAKE`, `NITRO`, `CRUISE`, `PIT`, `A/B/X/Y`) now uses its own unique button slot (`0..15`) with zero shared triggers.
+- Separated overlapping touch zones: moved `CAM`/`MAP` off the `GEAR UP` paddle in Racepad mode, spaced Left Stick and D-Pad cleanly in Gamepad mode, moved `VIEW`/`GUIDE`/`MENU` above Right Stick, separated Right Stick from `ABXY`, and locked active stick fingers by pointer ID.
+- Enabled `TCP_NODELAY`, bumped input streaming to 100Hz with immediate wake on touch/steering changes, lowered pedal minimum floor to 4%, switched sensor filtering to velocity-adaptive smoothing, and removed double-filtering delay on the virtual wheel.
+
+### Windows PC companion
+
+- Removed overlapping XInput aliases (`HANDBRAKE`/`PIT` no longer trigger Xbox `GUIDE`, `NITRO`/`CRUISE` no longer overlap `D-Pad`, and `PADDLE` no longer duplicates `LB`/`RB`), while keeping all 16 buttons separate in vJoy.
+- Enabled `TCP_NODELAY` on phone sockets and upgraded desktop/web cockpit polling from 6.6Hz (`150ms`) to 30Hz (`33ms`) over HTTP/1.1 keep-alive for smooth telemetry.
+
 ## 0.1.0-beta.3 - Realistic steering-wheel rotation
 
 ### Android mobile app

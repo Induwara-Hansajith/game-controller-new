@@ -74,7 +74,13 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private volatile boolean hasNeutral;
     private volatile float unwrappedWheelRad;
     private volatile float smoothedWheelDeg;
+    private volatile float prevTargetDeg;
+    private volatile float angularSpeedDegSec;
+    private volatile long lastSensorTimestampNs;
+    private volatile float lastNotifiedGyroSteer;
     private volatile float wheelMaxDeg = 90f;
+    private final Object sendLock = new Object();
+    private volatile boolean sendPending;
     private volatile float gyroSteer;
     private volatile float touchSteer;
     private volatile boolean touchingWheel;
@@ -197,6 +203,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
         this.dpadRight = newDpadRight;
         if (newButtons != null) {
             System.arraycopy(newButtons, 0, this.buttons, 0, Math.min(newButtons.length, 16));
+        }
+        synchronized (sendLock) {
+            sendPending = true;
+            sendLock.notifyAll();
         }
     }
 
@@ -534,6 +544,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         Socket candidate = new Socket();
         try {
             candidate.connect(new InetSocketAddress(host, PORT), 4500);
+            candidate.setTcpNoDelay(true);
+            try { candidate.setTrafficClass(0x10); } catch (Exception ignored) {}
             if (token != connectionToken) throw new InterruptedException("Cancelled");
 
             socket = candidate;
@@ -565,7 +577,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
                     dialogStatusText.setText("Connected to " + host);
                     dialogStatusText.setTextColor(0xff10b981);
                 }
-                controllerPad.setConnectionStatus(true, discoveredName.isEmpty() ? host : discoveredName, "60Hz · 4ms");
+                controllerPad.setConnectionStatus(true, discoveredName.isEmpty() ? host : discoveredName, "100Hz");
                 if (setupDialog != null && setupDialog.isShowing()) {
                     setupDialog.dismiss();
                 }
@@ -574,6 +586,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
             calibrate();
 
             while (connected && token == connectionToken && !candidate.isClosed()) {
+                long sentAtNs = System.nanoTime();
                 JSONObject packet = inputPacket();
                 output.write(packet.toString());
                 output.newLine();
@@ -581,7 +594,14 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 if (writer != output || socket == null || socket.isClosed()) {
                     throw new IllegalStateException("Socket disconnected");
                 }
-                Thread.sleep(20);
+                synchronized (sendLock) {
+                    sendPending = false;
+                    long elapsedMs = (System.nanoTime() - sentAtNs) / 1_000_000L;
+                    long waitMs = Math.max(4L, 10L - elapsedMs);
+                    if (!sendPending) {
+                        sendLock.wait(waitMs);
+                    }
+                }
             }
         } catch (Exception error) {
             boolean cancelled = token != connectionToken;
@@ -667,6 +687,9 @@ public final class MainActivity extends Activity implements SensorEventListener,
         Socket old = socket;
         socket = null;
         writer = null;
+        synchronized (sendLock) {
+            sendLock.notifyAll();
+        }
         closeSocket(old);
         if (dialogConnectBtn != null) dialogConnectBtn.setText("Connect to PC");
         if (dialogStatusText != null) {
@@ -691,6 +714,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
         }
         unwrappedWheelRad = 0f;
         smoothedWheelDeg = 0f;
+        prevTargetDeg = 0f;
+        angularSpeedDegSec = 0f;
+        lastSensorTimestampNs = 0L;
+        lastNotifiedGyroSteer = 0f;
         gyroSteer = 0f;
         touchSteer = 0f;
         if (controllerPad != null) controllerPad.resetSteering();
@@ -843,7 +870,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         if (sensorManager != null && rotationSensor != null) {
             hasNeutral = false;
             hasLastQuat = false;
-            sensorManager.registerListener(this, rotationSensor, 10000);
+            lastSensorTimestampNs = 0L;
+            sensorManager.registerListener(this, rotationSensor, SensorManager.SENSOR_DELAY_FASTEST);
         }
         startDiscovery();
     }
@@ -891,6 +919,9 @@ public final class MainActivity extends Activity implements SensorEventListener,
             hasNeutral = true;
             unwrappedWheelRad = 0f;
             smoothedWheelDeg = 0f;
+            prevTargetDeg = 0f;
+            angularSpeedDegSec = 0f;
+            lastSensorTimestampNs = event.timestamp;
             gyroSteer = 0f;
             if (controllerPad != null) controllerPad.setDisplayedGyroSteer(0f);
             return;
@@ -909,8 +940,22 @@ public final class MainActivity extends Activity implements SensorEventListener,
         float maxTrack = Math.max(wheelMaxDeg * 1.5f, 270f);
         float targetDeg = Math.max(-maxTrack, Math.min(maxTrack, (float) Math.toDegrees(unwrappedWheelRad)));
 
-        smoothedWheelDeg += (targetDeg - smoothedWheelDeg) * 0.42f;
-        float deadDeg = 1.5f;
+        float dt = lastSensorTimestampNs == 0L
+                ? 0.01f
+                : Math.max(0.002f, Math.min(0.05f, (event.timestamp - lastSensorTimestampNs) * 1e-9f));
+        lastSensorTimestampNs = event.timestamp;
+
+        // Velocity-adaptive One-Euro-style smoothing: steady when holding, instant when flicking.
+        float instSpeed = Math.abs(targetDeg - prevTargetDeg) / dt;
+        prevTargetDeg = targetDeg;
+        float speedAlpha = 1f - (float) Math.exp(-TWO_PI * 10f * dt);
+        angularSpeedDegSec += (instSpeed - angularSpeedDegSec) * speedAlpha;
+
+        float cutoffHz = 5.5f + Math.min(28f, angularSpeedDegSec * 0.16f);
+        float smoothAlpha = 1f - (float) Math.exp(-TWO_PI * cutoffHz * dt);
+        smoothedWheelDeg += (targetDeg - smoothedWheelDeg) * smoothAlpha;
+
+        float deadDeg = 1.2f;
         float absDeg = Math.abs(smoothedWheelDeg);
         float effectiveDeg = absDeg <= deadDeg
                 ? 0f
@@ -920,6 +965,13 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 );
 
         gyroSteer = finite(effectiveDeg / wheelMaxDeg);
+        if (Math.abs(gyroSteer - lastNotifiedGyroSteer) >= 0.006f) {
+            lastNotifiedGyroSteer = gyroSteer;
+            synchronized (sendLock) {
+                sendPending = true;
+                sendLock.notifyAll();
+            }
+        }
         if (controllerPad != null) {
             controllerPad.setDisplayedGyroSteer(gyroSteer);
         }

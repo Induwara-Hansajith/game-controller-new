@@ -378,27 +378,23 @@ class Xbox360Device:
         buttons = data.get("buttons", [])
         if not isinstance(buttons, list):
             buttons = []
-        # XInput has 15 physical button flags. Slots 12-16 are useful aliases
-        # for paddles/gears on XInput; vJoy preserves all 16 independently.
+        # Keep XInput button flags 1:1 without overlapping D-Pad or triggering Guide in Racepad mode.
+        # vJoy exposes all 16 independent buttons separately.
         btn_map = [
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_START,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE,
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_A,              # 0: A
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_B,              # 1: B
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              # 2: X
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,              # 3: Y
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,  # 4: LB / GEAR DOWN
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER, # 5: RB / GEAR UP
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,           # 6: VIEW / CAM
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_START,          # 7: MENU / MAP
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE if mode == "gamepad" else None,  # 8: GUIDE (Gamepad only)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,     # 9: L3 / HORN
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,    # 10: R3 / LIGHTS
         ]
-        pressed = {flag for i, flag in enumerate(btn_map) if i < len(buttons) and bool(buttons[i])}
+        pressed = {flag for i, flag in enumerate(btn_map) if flag is not None and i < len(buttons) and bool(buttons[i])}
+        all_flags = {flag for flag in btn_map if flag is not None}
         dpad = self._dpad_buttons(data.get("dpad", {}))
         dpad_map = {
             "up": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
@@ -407,7 +403,7 @@ class Xbox360Device:
             "right": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
         }
         pressed.update(dpad_map[name] for name in dpad)
-        for flag in set(btn_map) | set(dpad_map.values()):
+        for flag in all_flags | set(dpad_map.values()):
             if flag in pressed:
                 pad.press_button(button=flag)
             else:

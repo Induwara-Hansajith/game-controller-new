@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import asyncio
 import math
@@ -17,7 +18,7 @@ from tkinter import ttk
 
 
 APP_DIR = Path(__file__).resolve().parent
-VERSION = "0.1.0-beta.3"
+VERSION = "0.1.0-beta.4"
 
 
 def run_receiver() -> None:
@@ -36,6 +37,7 @@ class PocketControllerApp:
 
         self.receiver: subprocess.Popen | None = None
         self.closed = False
+        self._http_conn: http.client.HTTPConnection | None = None
 
         self.address_var = tk.StringVar(value="Discovering LAN…")
         self.pin_var = tk.StringVar(value="------")
@@ -178,7 +180,7 @@ class PocketControllerApp:
         btn_row = tk.Frame(right_panel, bg="#120e1c")
         btn_row.pack(fill="x")
         btn_names = ["A", "B", "X", "Y", "LB", "RB", "BACK", "START",
-                     "GUIDE", "L3", "R3", "P-L", "P-R", "GEAR+", "GEAR-", "AUX"]
+                     "PIT", "HORN", "LIGHT", "WIPER", "IGN", "NITRO", "CRUISE", "H-BRK"]
         for idx, name in enumerate(btn_names):
             box = tk.Label(btn_row, text=f"{name}\n{idx+1}", bg="#181324", fg="#94a3b8", width=5, pady=4,
                            font=("Segoe UI Semibold", 8), highlightthickness=1, highlightbackground="#2e253e")
@@ -366,13 +368,25 @@ class PocketControllerApp:
         if self.closed:
             return
         self._load_status()
-        self.root.after(150, self.refresh)
+        self.root.after(33, self.refresh)
 
     def _load_status(self) -> None:
         try:
-            with urllib.request.urlopen("http://127.0.0.1:8765/status", timeout=0.25) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            if self._http_conn is None:
+                self._http_conn = http.client.HTTPConnection("127.0.0.1", 8765, timeout=0.25)
+            self._http_conn.request("GET", "/status")
+            response = self._http_conn.getresponse()
+            raw = response.read()
+            if response.status != 200:
+                raise OSError(f"HTTP {response.status}")
+            data = json.loads(raw.decode("utf-8"))
+        except (OSError, http.client.HTTPException, json.JSONDecodeError):
+            if self._http_conn is not None:
+                try:
+                    self._http_conn.close()
+                except Exception:
+                    pass
+                self._http_conn = None
             process_running = self.receiver is not None and self.receiver.poll() is None
             self.connection_var.set("Starting receiver…" if process_running else "Receiver stopped")
             self.dot.configure(fg="#f59e0b" if process_running else "#e11d48")
