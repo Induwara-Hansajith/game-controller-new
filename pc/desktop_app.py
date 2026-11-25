@@ -17,7 +17,7 @@ from tkinter import ttk
 
 
 APP_DIR = Path(__file__).resolve().parent
-VERSION = "0.1.0-beta.2"
+VERSION = "0.1.0-beta.3"
 
 
 def run_receiver() -> None:
@@ -281,18 +281,18 @@ class PocketControllerApp:
             c.create_rectangle(0, 0, fill_w, 12, fill=meter["color"], outline="", tags="fill")
         meter["label"].configure(text=f"{round(pct * 100)}%")
 
-    def _draw_wheel(self, steer: float) -> None:
+    def _draw_wheel(self, steer: float, steer_deg: float | None = None) -> None:
         c = self.wheel_canvas
         c.delete("all")
 
         cx, cy, r = 110, 105, 78
 
-        # Arc track (-45 to +45 deg)
+        # Arc track (-90 to +90 deg)
         c.create_arc(cx - r - 8, cy - r - 8, cx + r + 8, cy + r + 8,
-                     start=45, extent=90, style="arc", outline="#292038", width=4)
+                     start=0, extent=180, style="arc", outline="#292038", width=4)
 
         # Rotate wheel angle
-        deg = steer * 45.0
+        deg = steer_deg if steer_deg is not None else (steer * 90.0)
         rad = math.radians(deg)
 
         # Rim
@@ -435,7 +435,9 @@ class PocketControllerApp:
             dpad_names = []
         self.dpad_var.set("D-pad  " + (" + ".join(dpad_names).upper() if dpad_names else "-") )
 
-        self._draw_wheel(steer)
+        raw_deg = data.get("steer_deg")
+        steer_deg = float(raw_deg) if raw_deg is not None else None
+        self._draw_wheel(steer, steer_deg)
         self._update_meter(self.throttle_bar, throttle)
         self._update_meter(self.brake_bar, brake)
         self._update_meter(self.clutch_bar, clutch)

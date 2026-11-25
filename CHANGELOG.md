@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-beta.3 - Realistic steering-wheel rotation
+
+### Android mobile app
+
+- Removed forward/back tilt steering (`orientation[2]`) and replaced it with true left/right phone steering-wheel rotation around the screen axis using `TYPE_GAME_ROTATION_VECTOR` quaternion swing-twist math.
+- Added selectable wheel lock ranges (`60°`, `90°` default, `135°`, `180°` each side), responsive smoothing, and a `1.5°` center deadzone.
+- Upgraded the virtual steering wheel with a 3-spoke GT wheel, thumb grips, 12 o'clock marker, synchronized arc gauge, circular finger-rotation touch drag, haptic center/lock cues, and smooth caster self-centering on release.
+
+### Windows PC companion
+
+- Synced desktop and web cockpit steering wheel displays with full wheel rotation angles (`steer_deg`, defaulting to `±90°`).
+
 ## 0.1.0-beta.2 - Full controller pre-release
 
 ### Android mobile app

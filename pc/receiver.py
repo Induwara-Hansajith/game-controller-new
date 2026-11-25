@@ -26,7 +26,7 @@ INPUT_HOST, INPUT_PORT = "0.0.0.0", 8766
 DISCOVERY_PORT = 8767
 MAX_LINE_BYTES = 4096
 PAIRING_PIN = f"{secrets.randbelow(1_000_000):06d}"
-VERSION = "0.1.0-beta.2"
+VERSION = "0.1.0-beta.3"
 
 state_lock = threading.Lock()
 shutdown_event = threading.Event()
@@ -49,6 +49,7 @@ state = {
     "driver_error": "",
     "message": "Waiting for phone",
     "steer": 0.0,
+    "steer_deg": 0.0,
     "throttle": 0.0,
     "brake": 0.0,
     "clutch": 0.0,
@@ -302,7 +303,7 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                     device.neutral()
                     refresh_driver_state(
                         device,
-                        steer=0.0, throttle=0.0, brake=0.0, clutch=0.0, handbrake=0.0,
+                        steer=0.0, steer_deg=0.0, throttle=0.0, brake=0.0, clutch=0.0, handbrake=0.0,
                         lx=0.0, ly=0.0, rx=0.0, ry=0.0, lt=0.0, rt=0.0,
                         dpad={}, buttons=[], driver_error="",
                     )
@@ -332,6 +333,7 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             values = {
                 "controller_mode": mode,
                 "steer": clamp(packet.get("steer", 0.0), -1.0, 1.0),
+                "steer_deg": clamp(packet["steer_deg"], -360.0, 360.0) if "steer_deg" in packet else None,
                 "throttle": clamp(packet.get("throttle"), 0.0, 1.0),
                 "brake": clamp(packet.get("brake"), 0.0, 1.0),
                 "clutch": clamp(packet.get("clutch"), 0.0, 1.0),
@@ -369,6 +371,7 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 phone="",
                 message="Waiting for phone",
                 steer=0.0,
+                steer_deg=0.0,
                 throttle=0.0,
                 brake=0.0,
                 clutch=0.0,

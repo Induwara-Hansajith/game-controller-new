@@ -8,6 +8,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -40,6 +41,10 @@ public final class ControllerPad extends View {
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rectTmp = new RectF();
+    private final RectF arcRectTmp = new RectF();
+    private final Path spokePath = new Path();
+    private final Typeface typefaceBold = Typeface.create("sans-serif-medium", Typeface.BOLD);
+    private final Typeface typefaceNormal = Typeface.create("sans-serif", Typeface.NORMAL);
 
     private Listener listener;
     private Vibrator vibrator;
@@ -49,10 +54,20 @@ public final class ControllerPad extends View {
     private String pcDisplayName = "PC";
     private String latencyText = "60Hz";
     private boolean gyroEnabled = true;
+    private float wheelMaxDeg = 90f;
 
     // Output & rendered state
     private float steer = 0f;
+    private float sensorSteer = 0f;
+    private float touchWheelDeg = 0f;
+    private float displayWheelDeg = 0f;
+    private long lastAnimNs = 0L;
+    private int steerPointerId = MotionEvent.INVALID_POINTER_ID;
+    private float lastTouchAngleDeg = 0f;
+    private float lastTouchX = 0f;
+    private boolean hitFullLockHaptic = false;
     private boolean steeringTouch = false;
+    private boolean leftStickTouched = false;
     private float throttle = 0f;
     private float brake = 0f;
     private float clutch = 0f;
@@ -119,10 +134,36 @@ public final class ControllerPad extends View {
         postInvalidateOnAnimation();
     }
 
+    public void setWheelMaxDeg(float maxDeg) {
+        this.wheelMaxDeg = clamp(maxDeg, 30f, 360f);
+        this.touchWheelDeg = clamp(this.touchWheelDeg, -this.wheelMaxDeg, this.wheelMaxDeg);
+        this.displayWheelDeg = clamp(this.displayWheelDeg, -this.wheelMaxDeg, this.wheelMaxDeg);
+        postInvalidateOnAnimation();
+    }
+
+    public boolean isLeftStickTouched() {
+        return leftStickTouched;
+    }
+
+    public void resetSteering() {
+        sensorSteer = 0f;
+        touchWheelDeg = 0f;
+        displayWheelDeg = 0f;
+        steer = 0f;
+        steeringTouch = false;
+        steerPointerId = MotionEvent.INVALID_POINTER_ID;
+        lastAnimNs = 0L;
+        if (currentMode == MODE_GAMEPAD && !leftStickTouched) {
+            lx = 0f;
+        }
+        postInvalidateOnAnimation();
+    }
+
     public void setDisplayedGyroSteer(float gyroVal) {
+        this.sensorSteer = clamp(gyroVal, -1f, 1f);
         if (!steeringTouch && gyroEnabled) {
-            this.steer = clamp(gyroVal, -1f, 1f);
-            if (currentMode == MODE_GAMEPAD && Math.abs(lx) < 0.05f) {
+            this.steer = this.sensorSteer;
+            if (currentMode == MODE_GAMEPAD && !leftStickTouched) {
                 this.lx = this.steer;
             }
             postInvalidateOnAnimation();
@@ -201,10 +242,11 @@ public final class ControllerPad extends View {
         drawText(canvas, "GEAR UP ▶ (RB)", w - dp(12) - paddleW / 2f, topY + paddleH / 2f + dp(3.5f), 10.5f, gearUp ? 0xffffffff : 0xffc4b5fd, Paint.Align.CENTER, true);
 
         // --- STEERING WHEEL & ARC GAUGE ---
-        float cx = w * 0.23f;
-        float cy = (h + topY + paddleH) / 2f - dp(16);
-        float radius = Math.min(w * 0.19f, (h - topY - paddleH) * 0.40f);
-        drawSteeringGauge(canvas, cx, cy, radius, steer);
+        updateSteeringAnimation();
+        float cx = wheelCx(w);
+        float cy = wheelCy(h);
+        float radius = wheelRadius(w, h);
+        drawSteeringGauge(canvas, cx, cy, radius);
 
         // 4 Simulator Quick Toggles under Wheel: LIGHTS(8), HORN(9), WIPERS(13), IGNITION(12)
         float subRowY = h - dp(32);
@@ -428,70 +470,234 @@ public final class ControllerPad extends View {
         drawText(canvas, "▶", cx + span - armH * 0.5f, cy + dp(3), 9f, dpadRight ? 0xffffffff : 0xff94a3b8, Paint.Align.CENTER, true);
     }
 
-    private void drawSteeringGauge(Canvas canvas, float cx, float cy, float radius, float steerVal) {
-        rectTmp.set(cx - radius, cy - radius, cx + radius, cy + radius);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(6));
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setColor(0xff1f192c);
-        canvas.drawArc(rectTmp, 135, 270, false, paint);
+    private float wheelCx(float w) {
+        return w * 0.23f;
+    }
 
-        paint.setColor(COLOR_ACCENT);
-        float sweep = steerVal * 135f;
-        canvas.drawArc(rectTmp, 270, sweep, false, paint);
+    private float wheelCy(float h) {
+        float topY = dp(48);
+        float paddleH = dp(34);
+        return (h + topY + paddleH) / 2f - dp(16);
+    }
 
-        // Graduation Ticks
-        for (int deg = -90; deg <= 90; deg += 30) {
-            double rad = Math.toRadians(270 + deg * 1.5);
-            float inner = radius - (deg == 0 ? dp(14) : dp(8));
-            float outer = radius + dp(4);
-            paint.setStrokeWidth(deg == 0 ? dp(2.5f) : dp(1.5f));
-            paint.setColor(deg == 0 ? 0xfff59e0b : 0xff473b5e);
-            canvas.drawLine(cx + (float) Math.cos(rad) * inner, cy + (float) Math.sin(rad) * inner,
-                    cx + (float) Math.cos(rad) * outer, cy + (float) Math.sin(rad) * outer, paint);
+    private float wheelRadius(float w, float h) {
+        float topY = dp(48);
+        float paddleH = dp(34);
+        return Math.min(w * 0.19f, (h - topY - paddleH) * 0.40f);
+    }
+
+    private void updateSteeringAnimation() {
+        long now = System.nanoTime();
+        float dt = lastAnimNs == 0L ? 0.016f : clamp((now - lastAnimNs) / 1_000_000_000f, 0.001f, 0.05f);
+        lastAnimNs = now;
+
+        if (steeringTouch) {
+            displayWheelDeg = touchWheelDeg;
+            return;
         }
 
-        // Inner Wheel Body
-        canvas.save();
-        float rotDeg = steerVal * 45f;
-        canvas.rotate(rotDeg, cx, cy);
+        if (gyroEnabled) {
+            float targetDeg = clamp(sensorSteer, -1f, 1f) * wheelMaxDeg;
+            float diff = targetDeg - displayWheelDeg;
+            if (Math.abs(diff) > 0.18f) {
+                float k = 1f - (float) Math.exp(-dt * 28f);
+                displayWheelDeg += diff * k;
+                this.steer = clamp(displayWheelDeg / wheelMaxDeg, -1f, 1f);
+                postInvalidateOnAnimation();
+            } else {
+                displayWheelDeg = targetDeg;
+                this.steer = clamp(sensorSteer, -1f, 1f);
+            }
+            return;
+        }
 
+        // Smooth caster self-centering when touch steering is released.
+        if (Math.abs(displayWheelDeg) > 0.35f) {
+            float k = 1f - (float) Math.exp(-dt * 14f);
+            displayWheelDeg += (0f - displayWheelDeg) * k;
+            touchWheelDeg = displayWheelDeg;
+            this.steer = clamp(displayWheelDeg / wheelMaxDeg, -1f, 1f);
+            notifyInputChanged();
+            postInvalidateOnAnimation();
+        } else if (displayWheelDeg != 0f || this.steer != 0f || touchWheelDeg != 0f) {
+            displayWheelDeg = 0f;
+            touchWheelDeg = 0f;
+            this.steer = 0f;
+            notifyInputChanged();
+        }
+    }
+
+    private void drawSteeringGauge(Canvas canvas, float cx, float cy, float radius) {
+        float steerVal = clamp(displayWheelDeg / Math.max(1f, wheelMaxDeg), -1f, 1f);
+        float arcHalf = Math.min(135f, wheelMaxDeg);
+
+        // Outer Precision Gauge Arc
+        arcRectTmp.set(cx - radius, cy - radius, cx + radius, cy + radius);
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(10));
-        paint.setColor(0xff1e172a);
-        canvas.drawCircle(cx, cy, radius * 0.76f, paint);
+        paint.setStrokeWidth(dp(5.5f));
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setColor(0xff1b1528);
+        canvas.drawArc(arcRectTmp, 270f - arcHalf, arcHalf * 2f, false, paint);
 
+        // Active Steering Sweep
+        float sweep = steerVal * arcHalf;
+        if (Math.abs(sweep) > 0.5f) {
+            paint.setColor(steeringTouch ? 0xffa855f7 : (Math.abs(steerVal) > 0.72f ? 0xff38bdf8 : COLOR_ACCENT));
+            canvas.drawArc(arcRectTmp, 270f, sweep, false, paint);
+        }
+
+        // Graduation Ticks (every 15 deg across gauge span)
+        int step = 15;
+        int maxTick = Math.round(arcHalf);
+        for (int deg = -maxTick; deg <= maxTick; deg += step) {
+            boolean major = (deg == 0) || (Math.abs(deg) % 30 == 0) || (Math.abs(deg) == maxTick);
+            double rad = Math.toRadians(270.0 + deg);
+            float inner = radius - (deg == 0 ? dp(13) : (major ? dp(8.5f) : dp(5.5f)));
+            float outer = radius + dp(3.5f);
+            paint.setStrokeWidth(deg == 0 ? dp(2.4f) : (major ? dp(1.5f) : dp(1f)));
+            paint.setColor(deg == 0 ? 0xfff59e0b : (major ? 0xff5b4a7a : 0xff2f2543));
+            canvas.drawLine(
+                    cx + (float) Math.cos(rad) * inner,
+                    cy + (float) Math.sin(rad) * inner,
+                    cx + (float) Math.cos(rad) * outer,
+                    cy + (float) Math.sin(rad) * outer,
+                    paint
+            );
+        }
+
+        // Rotating 3D GT Steering Wheel Body
+        float rimR = radius * 0.76f;
+        float rimThick = Math.max(dp(11), radius * 0.135f);
+        float hubR = radius * 0.27f;
+
+        canvas.save();
+        canvas.rotate(displayWheelDeg, cx, cy);
+
+        // Rim drop shadow
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(rimThick + dp(3));
+        paint.setColor(0xff050308);
+        canvas.drawCircle(cx, cy + dp(1.5f), rimR, paint);
+
+        // Tapered 3-spoke metallic chassis behind rim & hub
+        drawTaperedSpoke(canvas, cx, cy, rimR * 0.94f, hubR * 0.7f, 188f, dp(10), dp(14));
+        drawTaperedSpoke(canvas, cx, cy, rimR * 0.94f, hubR * 0.7f, -8f, dp(10), dp(14));
+        drawTaperedSpoke(canvas, cx, cy, rimR * 0.94f, hubR * 0.7f, 90f, dp(12), dp(17));
+
+        // Matte leather/carbon main wheel rim
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(rimThick);
+        paint.setColor(0xff1a1524);
+        canvas.drawCircle(cx, cy, rimR, paint);
+
+        // Outer metallic bevel & active grip highlight
         paint.setStrokeWidth(dp(1.8f));
-        paint.setColor(steeringTouch ? 0xffa855f7 : 0xff4f4066);
-        canvas.drawCircle(cx, cy, radius * 0.76f + dp(5), paint);
+        paint.setColor(steeringTouch ? 0xffc084fc : (Math.abs(steerVal) > 0.04f ? 0xff7c3aed : 0xff463761));
+        canvas.drawCircle(cx, cy, rimR + rimThick * 0.5f - dp(0.5f), paint);
 
-        // Top Stripe
+        // Inner stitch contour ring
+        paint.setStrokeWidth(dp(1.2f));
+        paint.setColor(0xff2c223f);
+        canvas.drawCircle(cx, cy, rimR - rimThick * 0.5f + dp(1.2f), paint);
+
+        // Sculpted 9 o'clock & 3 o'clock ergonomic thumb bolsters
+        arcRectTmp.set(cx - rimR, cy - rimR, cx + rimR, cy + rimR);
+        paint.setStrokeWidth(rimThick + dp(3.5f));
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setColor(0xff271f36);
+        canvas.drawArc(arcRectTmp, 158f, 44f, false, paint);
+        canvas.drawArc(arcRectTmp, -22f, 44f, false, paint);
+
+        paint.setStrokeWidth(dp(1.5f));
+        paint.setColor(steeringTouch ? 0xffa855f7 : 0xff5a487a);
+        canvas.drawArc(arcRectTmp, 162f, 36f, false, paint);
+        canvas.drawArc(arcRectTmp, -18f, 36f, false, paint);
+
+        // 12 o'clock center racing stripe
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(0xfff59e0b);
-        rectTmp.set(cx - dp(4), cy - radius * 0.76f - dp(5), cx + dp(4), cy - radius * 0.76f + dp(5));
+        float stripeHalfW = Math.max(dp(3.5f), rimThick * 0.34f);
+        rectTmp.set(
+                cx - stripeHalfW,
+                cy - rimR - rimThick * 0.54f,
+                cx + stripeHalfW,
+                cy - rimR + rimThick * 0.54f
+        );
         canvas.drawRoundRect(rectTmp, dp(2), dp(2), paint);
+        paint.setColor(0xfffde68a);
+        rectTmp.inset(dp(1.4f), dp(1.6f));
+        canvas.drawRoundRect(rectTmp, dp(1.2f), dp(1.2f), paint);
 
-        // Spokes
-        paint.setColor(0xff292038);
-        paint.setStrokeWidth(dp(6));
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        canvas.drawLine(cx - radius * 0.65f, cy, cx + radius * 0.65f, cy, paint);
-        canvas.drawLine(cx, cy, cx, cy + radius * 0.65f, paint);
-
-        // Hub
+        // Center Hub & Machined Bolts
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(COLOR_PANEL);
-        canvas.drawCircle(cx, cy, radius * 0.32f, paint);
+        paint.setColor(0xff130f1d);
+        canvas.drawCircle(cx, cy, hubR, paint);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(2));
-        paint.setColor(COLOR_ACCENT);
-        canvas.drawCircle(cx, cy, radius * 0.32f, paint);
+        paint.setColor(steeringTouch ? 0xffc084fc : 0xff5b4878);
+        canvas.drawCircle(cx, cy, hubR, paint);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xff786799);
+        float boltRingR = hubR * 0.78f;
+        for (int b = 0; b < 6; b++) {
+            double brad = Math.toRadians(b * 60.0);
+            canvas.drawCircle(
+                    cx + (float) Math.cos(brad) * boltRingR,
+                    cy + (float) Math.sin(brad) * boltRingR,
+                    dp(1.5f),
+                    paint
+            );
+        }
 
         canvas.restore();
 
-        int angle = Math.round(steerVal * 45f);
+        // Upright Digital Angle Badge on Center Hub
+        int angle = Math.round(displayWheelDeg);
         String angleStr = (angle > 0 ? "+" : "") + angle + "°";
-        drawText(canvas, angleStr, cx, cy + dp(6), 18f, 0xffffffff, Paint.Align.CENTER, true);
+        float badgeW = Math.max(dp(46), hubR * 1.85f);
+        float badgeH = dp(24);
+        rectTmp.set(cx - badgeW / 2f, cy - badgeH / 2f, cx + badgeW / 2f, cy + badgeH / 2f);
+        drawPill(canvas, rectTmp, 0xe6100c18, steeringTouch ? 0xffc084fc : 0xff463761);
+        drawText(canvas, angleStr, cx, cy + dp(4.5f), 13.5f, 0xffffffff, Paint.Align.CENTER, true);
+
+        // Mode & Lock Range Micro-Badge
+        String modeTag = steeringTouch
+                ? String.format(Locale.US, "TOUCH WHEEL · ±%d°", Math.round(wheelMaxDeg))
+                : (gyroEnabled
+                        ? String.format(Locale.US, "ROTATE PHONE · ±%d°", Math.round(wheelMaxDeg))
+                        : String.format(Locale.US, "DRAG WHEEL · ±%d°", Math.round(wheelMaxDeg)));
+        drawText(canvas, modeTag, cx, cy + radius + dp(13), 8.2f, COLOR_TEXT_MUTED, Paint.Align.CENTER, true);
+    }
+
+    private void drawTaperedSpoke(Canvas canvas, float cx, float cy, float outerLen, float innerLen,
+                                  float angleDeg, float outerHalfW, float innerHalfW) {
+        double rad = Math.toRadians(angleDeg);
+        float cos = (float) Math.cos(rad);
+        float sin = (float) Math.sin(rad);
+        float px = -sin;
+        float py = cos;
+
+        float ix = cx + cos * innerLen;
+        float iy = cy + sin * innerLen;
+        float ox = cx + cos * outerLen;
+        float oy = cy + sin * outerLen;
+
+        spokePath.reset();
+        spokePath.moveTo(ix + px * innerHalfW * 0.5f, iy + py * innerHalfW * 0.5f);
+        spokePath.lineTo(ox + px * outerHalfW * 0.5f, oy + py * outerHalfW * 0.5f);
+        spokePath.lineTo(ox - px * outerHalfW * 0.5f, oy - py * outerHalfW * 0.5f);
+        spokePath.lineTo(ix - px * innerHalfW * 0.5f, iy - py * innerHalfW * 0.5f);
+        spokePath.close();
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xff251d36);
+        canvas.drawPath(spokePath, paint);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1.2f));
+        paint.setColor(0xff3f3259);
+        canvas.drawPath(spokePath, paint);
     }
 
     private void drawPedal(Canvas canvas, float left, float right, float top, float bottom, String label, float value, int colorTop, int colorBottom) {
@@ -555,7 +761,7 @@ public final class ControllerPad extends View {
         paint.setColor(color);
         paint.setTextSize(dp(sizeSp));
         paint.setTextAlign(align);
-        paint.setTypeface(android.graphics.Typeface.create(bold ? "sans-serif-medium" : "sans-serif", bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
+        paint.setTypeface(bold ? typefaceBold : typefaceNormal);
         canvas.drawText(text, x, y, paint);
     }
 
@@ -570,7 +776,7 @@ public final class ControllerPad extends View {
             return true;
         }
 
-        // Single-tap triggers for HUD top bar
+        // Single-tap triggers for HUD top bar & claim steering wheel finger
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
             float tx = event.getX(actionIndex);
             float ty = event.getY(actionIndex);
@@ -578,13 +784,32 @@ public final class ControllerPad extends View {
                 handleHudTouch(tx, ty, w);
                 return true;
             }
+            if (currentMode == MODE_RACEPAD && steerPointerId == MotionEvent.INVALID_POINTER_ID) {
+                float cx = wheelCx(w);
+                float cy = wheelCy(h);
+                float radius = wheelRadius(w, h);
+                if (tx < w * 0.44f && ty < h - dp(40) && Math.hypot(tx - cx, ty - cy) <= radius * 1.42f) {
+                    steerPointerId = event.getPointerId(actionIndex);
+                    steeringTouch = true;
+                    touchWheelDeg = displayWheelDeg;
+                    lastTouchAngleDeg = (float) Math.toDegrees(Math.atan2(ty - cy, tx - cx));
+                    lastTouchX = tx;
+                    hitFullLockHaptic = Math.abs(touchWheelDeg) >= wheelMaxDeg - 0.5f;
+                    lastAnimNs = 0L;
+                }
+            }
         }
 
         boolean lifted = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP;
+        int liftedIndex = event.getActionIndex();
+        if (lifted && event.getPointerId(liftedIndex) == steerPointerId) {
+            steerPointerId = MotionEvent.INVALID_POINTER_ID;
+        }
 
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN || action == MotionEvent.ACTION_MOVE || lifted) {
             float nextSteer = 0f;
             boolean nextSteeringTouch = false;
+            boolean nextLeftStickTouch = false;
             float nextThrottle = 0f;
             float nextBrake = 0f;
             float nextClutch = 0f;
@@ -597,15 +822,49 @@ public final class ControllerPad extends View {
             boolean[] nextButtons = new boolean[16];
 
             int count = lifted ? Math.max(0, event.getPointerCount() - 1) : event.getPointerCount();
-            int liftedIndex = event.getActionIndex();
 
             for (int i = 0, used = 0; i < event.getPointerCount(); i++) {
                 if (lifted && i == liftedIndex) continue;
                 if (used >= count) break;
                 used++;
 
+                int pointerId = event.getPointerId(i);
                 float x = event.getX(i);
                 float y = event.getY(i);
+
+                if (currentMode == MODE_RACEPAD && pointerId == steerPointerId) {
+                    float cx = wheelCx(w);
+                    float cy = wheelCy(h);
+                    float radius = wheelRadius(w, h);
+                    float dist = (float) Math.hypot(x - cx, y - cy);
+                    float prevTouchDeg = touchWheelDeg;
+
+                    if (dist >= radius * 0.22f) {
+                        float curAngleDeg = (float) Math.toDegrees(Math.atan2(y - cy, x - cx));
+                        float deltaDeg = wrapDeg180(curAngleDeg - lastTouchAngleDeg);
+                        lastTouchAngleDeg = curAngleDeg;
+                        touchWheelDeg = clamp(touchWheelDeg + deltaDeg, -wheelMaxDeg, wheelMaxDeg);
+                    } else {
+                        float dx = x - lastTouchX;
+                        touchWheelDeg = clamp(touchWheelDeg + (dx / Math.max(1f, radius * 0.75f)) * 45f, -wheelMaxDeg, wheelMaxDeg);
+                        lastTouchAngleDeg = (float) Math.toDegrees(Math.atan2(y - cy, x - cx));
+                    }
+                    lastTouchX = x;
+                    displayWheelDeg = touchWheelDeg;
+                    nextSteeringTouch = true;
+                    nextSteer = clamp(touchWheelDeg / Math.max(1f, wheelMaxDeg), -1f, 1f);
+
+                    if ((prevTouchDeg < 0f && touchWheelDeg >= 0f) || (prevTouchDeg > 0f && touchWheelDeg <= 0f)) {
+                        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                    }
+                    boolean atLock = Math.abs(touchWheelDeg) >= wheelMaxDeg - 0.5f;
+                    if (atLock && !hitFullLockHaptic) {
+                        triggerLightTick();
+                    }
+                    hitFullLockHaptic = atLock;
+                    continue;
+                }
+
                 if (y <= dp(44)) continue;
 
                 if (currentMode == MODE_RACEPAD) {
@@ -637,15 +896,7 @@ public final class ControllerPad extends View {
                         }
                     }
 
-                    // Steering Wheel area
-                    float cx = w * 0.23f;
-                    float cy = (h + dp(48) + dp(34)) / 2f - dp(16);
-                    float radius = Math.min(w * 0.19f, (h - dp(48) - dp(34)) * 0.40f);
-                    if (x < w * 0.44f && y < h - dp(40) && Math.hypot(x - cx, y - cy) <= radius * 1.35f) {
-                        nextSteeringTouch = true;
-                        nextSteer = clamp((x - cx) / (radius * 0.75f), -1f, 1f);
-                        continue;
-                    }
+                    // Wheel touches are tracked by steerPointerId above.
 
                     // Sub-toggles under Wheel: LIGHTS(8), HORN(9), WIPERS(13), IGN(12)
                     if (y >= h - dp(36) && x <= w * 0.44f) {
@@ -749,6 +1000,7 @@ public final class ControllerPad extends View {
                         if (distL <= dp(16)) {
                             nextButtons[9] = true; // L3 click
                         }
+                        nextLeftStickTouch = true;
                         nextLx = clamp((x - stickCx) / stickR, -1f, 1f);
                         nextLy = clamp((y - stickCy) / stickR, -1f, 1f);
                         continue;
@@ -813,14 +1065,22 @@ public final class ControllerPad extends View {
                 }
             }
 
-            this.steer = nextSteeringTouch ? nextSteer : (gyroEnabled ? this.steer : nextSteer);
+            if (nextSteeringTouch) {
+                this.steer = nextSteer;
+            } else if (this.steeringTouch) {
+                this.steer = clamp(displayWheelDeg / Math.max(1f, wheelMaxDeg), -1f, 1f);
+                lastAnimNs = System.nanoTime();
+            } else {
+                this.steer = clamp(displayWheelDeg / Math.max(1f, wheelMaxDeg), -1f, 1f);
+            }
             this.steeringTouch = nextSteeringTouch;
+            this.leftStickTouched = nextLeftStickTouch;
             this.throttle = nextThrottle;
             this.brake = nextBrake;
             this.clutch = nextClutch;
             this.handbrake = nextHandbrake;
 
-            this.lx = (currentMode == MODE_GAMEPAD && gyroEnabled && Math.abs(nextLx) < 0.05f) ? this.steer : nextLx;
+            this.lx = (currentMode == MODE_GAMEPAD && gyroEnabled && !nextLeftStickTouch) ? this.steer : nextLx;
             this.ly = nextLy;
             this.rx = nextRx;
             this.ry = nextRy;
@@ -835,18 +1095,8 @@ public final class ControllerPad extends View {
             System.arraycopy(nextButtons, 0, buttons, 0, 16);
             System.arraycopy(buttons, 0, displayedButtons, 0, 16);
 
-            if (listener != null) {
-                listener.onInputChanged(
-                        currentMode == MODE_RACEPAD ? "racepad" : "gamepad",
-                        this.steer, this.steeringTouch,
-                        this.throttle, this.brake, this.clutch, this.handbrake,
-                        this.lx, this.ly, this.rx, this.ry,
-                        this.lt, this.rt,
-                        this.dpadUp, this.dpadDown, this.dpadLeft, this.dpadRight,
-                        Arrays.copyOf(buttons, 16)
-                );
-            }
-            invalidate();
+            notifyInputChanged();
+            postInvalidateOnAnimation();
             return true;
         }
 
@@ -929,9 +1179,44 @@ public final class ControllerPad extends View {
         } catch (Exception ignored) {}
     }
 
+    private void notifyInputChanged() {
+        if (listener == null) return;
+        listener.onInputChanged(
+                currentMode == MODE_RACEPAD ? "racepad" : "gamepad",
+                this.steer, this.steeringTouch,
+                this.throttle, this.brake, this.clutch, this.handbrake,
+                this.lx, this.ly, this.rx, this.ry,
+                this.lt, this.rt,
+                this.dpadUp, this.dpadDown, this.dpadLeft, this.dpadRight,
+                Arrays.copyOf(buttons, 16)
+        );
+    }
+
+    private void triggerLightTick() {
+        try {
+            if (vibrator != null && vibrator.hasVibrator() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(8, 90));
+            } else {
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static float wrapDeg180(float deg) {
+        while (deg > 180f) deg -= 360f;
+        while (deg <= -180f) deg += 360f;
+        return deg;
+    }
+
     private void clearInput() {
         steer = 0f;
+        sensorSteer = 0f;
+        touchWheelDeg = 0f;
+        displayWheelDeg = 0f;
+        steerPointerId = MotionEvent.INVALID_POINTER_ID;
+        lastAnimNs = 0L;
         steeringTouch = false;
+        leftStickTouched = false;
         throttle = 0f;
         brake = 0f;
         clutch = 0f;

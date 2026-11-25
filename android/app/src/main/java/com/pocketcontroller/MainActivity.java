@@ -64,12 +64,21 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private volatile boolean connecting;
     private volatile long connectionToken;
 
-    private volatile float currentRoll;
-    private volatile float neutralRoll;
+    private static final float TWO_PI = (float) (2.0 * Math.PI);
+    private static final float[] LOCK_DEG_OPTIONS = {60f, 90f, 135f, 180f};
+
+    private final float[] rawQuat = new float[4];
+    private final float[] currentQuat = new float[4];
+    private final float[] neutralQuat = new float[4];
+    private volatile boolean hasLastQuat;
     private volatile boolean hasNeutral;
+    private volatile float unwrappedWheelRad;
+    private volatile float smoothedWheelDeg;
+    private volatile float wheelMaxDeg = 90f;
     private volatile float gyroSteer;
     private volatile float touchSteer;
     private volatile boolean touchingWheel;
+    private volatile boolean touchingLeftStick;
     private volatile float throttle;
     private volatile float brake;
     private volatile float clutch;
@@ -113,14 +122,18 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         if (sensorManager != null) {
-            rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
-        }
-        if (rotationSensor == null) {
-            gyroEnabled = false;
-            controllerPad.setGyroEnabled(false);
+            rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+            if (rotationSensor == null) {
+                rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+            }
         }
 
         SharedPreferences prefs = getSharedPreferences("controller", MODE_PRIVATE);
+        wheelMaxDeg = prefs.getFloat("wheel_max_deg", 90f);
+        gyroEnabled = rotationSensor != null && prefs.getBoolean("wheel_rotation_enabled", true);
+        controllerPad.setWheelMaxDeg(wheelMaxDeg);
+        controllerPad.setGyroEnabled(gyroEnabled);
+
         discoveredHost = prefs.getString("last_host", "");
         discoveredPin = prefs.getString("last_pin", "");
 
@@ -167,6 +180,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         this.currentModeName = mode;
         this.touchSteer = steer;
         this.touchingWheel = isTouchingWheel;
+        this.touchingLeftStick = controllerPad != null && controllerPad.isLeftStickTouched();
         this.throttle = newThrottle;
         this.brake = newBrake;
         this.clutch = newClutch;
@@ -203,7 +217,11 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
     @Override
     public void onToggleGyro() {
+        if (rotationSensor == null) return;
         gyroEnabled = !gyroEnabled;
+        getSharedPreferences("controller", MODE_PRIVATE).edit()
+                .putBoolean("wheel_rotation_enabled", gyroEnabled)
+                .apply();
         controllerPad.setGyroEnabled(gyroEnabled);
         if (gyroEnabled) calibrate();
     }
@@ -306,15 +324,74 @@ public final class MainActivity extends Activity implements SensorEventListener,
         LinearLayout settingsCard = createCardLayout();
 
         Switch gyroToggle = new Switch(this);
-        gyroToggle.setText("Gyroscope Tilt Steering");
+        gyroToggle.setText("Steering Wheel Rotation");
         gyroToggle.setTextColor(Color.WHITE);
         gyroToggle.setChecked(gyroEnabled);
+        gyroToggle.setEnabled(rotationSensor != null);
         gyroToggle.setOnCheckedChangeListener((btn, checked) -> {
-            gyroEnabled = checked;
-            controllerPad.setGyroEnabled(checked);
-            if (checked) calibrate();
+            gyroEnabled = checked && rotationSensor != null;
+            getSharedPreferences("controller", MODE_PRIVATE).edit()
+                    .putBoolean("wheel_rotation_enabled", gyroEnabled)
+                    .apply();
+            controllerPad.setGyroEnabled(gyroEnabled);
+            if (gyroEnabled) calibrate();
         });
-        settingsCard.addView(gyroToggle, new LinearLayout.LayoutParams(-1, dp(40)));
+        settingsCard.addView(gyroToggle, new LinearLayout.LayoutParams(-1, dp(38)));
+
+        TextView steerHint = new TextView(this);
+        steerHint.setText(rotationSensor != null
+                ? "Rotate the phone left and right like a steering wheel (tilt ignored)."
+                : "No rotation sensor found; drag the virtual steering wheel on screen.");
+        steerHint.setTextColor(0xff94a3b8);
+        steerHint.setTextSize(11);
+        steerHint.setPadding(0, 0, 0, dp(8));
+        settingsCard.addView(steerHint);
+
+        TextView rangeLabel = new TextView(this);
+        rangeLabel.setText("Wheel Lock Range (each side)");
+        rangeLabel.setTextColor(0xffcbd5e1);
+        rangeLabel.setTextSize(12);
+        rangeLabel.setPadding(0, dp(2), 0, dp(6));
+        settingsCard.addView(rangeLabel);
+
+        LinearLayout rangeRow = new LinearLayout(this);
+        rangeRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button[] rangeBtns = new Button[LOCK_DEG_OPTIONS.length];
+        for (int i = 0; i < LOCK_DEG_OPTIONS.length; i++) {
+            float degOption = LOCK_DEG_OPTIONS[i];
+            Button optBtn = new Button(this);
+            optBtn.setText(Math.round(degOption) + "°");
+            optBtn.setTextSize(12);
+            optBtn.setAllCaps(false);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(36), 1f);
+            if (i < LOCK_DEG_OPTIONS.length - 1) lp.setMargins(0, 0, dp(6), 0);
+            rangeRow.addView(optBtn, lp);
+            rangeBtns[i] = optBtn;
+        }
+        Runnable refreshRangeStyles = () -> {
+            for (int i = 0; i < LOCK_DEG_OPTIONS.length; i++) {
+                boolean selected = Math.abs(wheelMaxDeg - LOCK_DEG_OPTIONS[i]) < 1f;
+                GradientDrawable pillBg = new GradientDrawable();
+                pillBg.setColor(selected ? 0xff7c3aed : 0xff120e1c);
+                pillBg.setCornerRadius(dp(8));
+                pillBg.setStroke(dp(1), selected ? 0xffc4b5fd : 0xff292038);
+                rangeBtns[i].setBackground(pillBg);
+                rangeBtns[i].setTextColor(selected ? Color.WHITE : 0xffcbd5e1);
+            }
+        };
+        for (int i = 0; i < LOCK_DEG_OPTIONS.length; i++) {
+            float degOption = LOCK_DEG_OPTIONS[i];
+            rangeBtns[i].setOnClickListener(v -> {
+                wheelMaxDeg = degOption;
+                getSharedPreferences("controller", MODE_PRIVATE).edit()
+                        .putFloat("wheel_max_deg", wheelMaxDeg)
+                        .apply();
+                controllerPad.setWheelMaxDeg(wheelMaxDeg);
+                refreshRangeStyles.run();
+            });
+        }
+        refreshRangeStyles.run();
+        settingsCard.addView(rangeRow, new LinearLayout.LayoutParams(-1, -2));
 
         Button centerBtn = createOutlineButton("⌖ Calibrate Neutral Center");
         centerBtn.setOnClickListener(v -> {
@@ -546,12 +623,17 @@ public final class MainActivity extends Activity implements SensorEventListener,
         packet.put("type", "input");
         packet.put("mode", currentModeName);
         float steer = touchingWheel || !gyroEnabled ? touchSteer : gyroSteer;
-        packet.put("steer", finite(steer));
+        float clampedSteer = finite(steer);
+        packet.put("steer", clampedSteer);
+        packet.put("steer_deg", Math.round(clampedSteer * wheelMaxDeg * 10f) / 10f);
         packet.put("throttle", finite(throttle));
         packet.put("brake", finite(brake));
         packet.put("clutch", finite(clutch));
         packet.put("handbrake", finite(handbrake));
-        packet.put("lx", finite(lx));
+        float outLx = ("gamepad".equals(currentModeName) && gyroEnabled && !touchingLeftStick && !touchingWheel)
+                ? clampedSteer
+                : ("gamepad".equals(currentModeName) && touchingWheel ? clampedSteer : lx);
+        packet.put("lx", finite(outLx));
         packet.put("ly", finite(ly));
         packet.put("rx", finite(rx));
         packet.put("ry", finite(ry));
@@ -601,9 +683,17 @@ public final class MainActivity extends Activity implements SensorEventListener,
     }
 
     private void calibrate() {
-        if (hasNeutral) neutralRoll = currentRoll;
+        if (hasLastQuat) {
+            System.arraycopy(currentQuat, 0, neutralQuat, 0, 4);
+            hasNeutral = true;
+        } else {
+            hasNeutral = false;
+        }
+        unwrappedWheelRad = 0f;
+        smoothedWheelDeg = 0f;
         gyroSteer = 0f;
-        if (controllerPad != null) controllerPad.invalidate();
+        touchSteer = 0f;
+        if (controllerPad != null) controllerPad.resetSteering();
     }
 
     private int dp(float value) {
@@ -751,7 +841,9 @@ public final class MainActivity extends Activity implements SensorEventListener,
         super.onResume();
         applyImmersive();
         if (sensorManager != null && rotationSensor != null) {
-            sensorManager.registerListener(this, rotationSensor, SensorManager.SENSOR_DELAY_GAME);
+            hasNeutral = false;
+            hasLastQuat = false;
+            sensorManager.registerListener(this, rotationSensor, 10000);
         }
         startDiscovery();
     }
@@ -773,23 +865,70 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() != Sensor.TYPE_ROTATION_VECTOR) return;
-        float[] matrix = new float[9];
-        float[] orientation = new float[3];
-        SensorManager.getRotationMatrixFromVector(matrix, event.values);
-        SensorManager.getOrientation(matrix, orientation);
-        currentRoll = orientation[2];
-        if (!hasNeutral) {
-            neutralRoll = currentRoll;
-            hasNeutral = true;
+        int type = event.sensor.getType();
+        if (type != Sensor.TYPE_GAME_ROTATION_VECTOR && type != Sensor.TYPE_ROTATION_VECTOR) return;
+
+        SensorManager.getQuaternionFromVector(rawQuat, event.values);
+        float norm = (float) Math.sqrt(
+                rawQuat[0] * rawQuat[0] + rawQuat[1] * rawQuat[1]
+                        + rawQuat[2] * rawQuat[2] + rawQuat[3] * rawQuat[3]
+        );
+        if (norm < 1e-6f) return;
+        for (int i = 0; i < 4; i++) rawQuat[i] /= norm;
+
+        if (hasLastQuat) {
+            float dot = rawQuat[0] * currentQuat[0] + rawQuat[1] * currentQuat[1]
+                    + rawQuat[2] * currentQuat[2] + rawQuat[3] * currentQuat[3];
+            if (dot < 0f) {
+                for (int i = 0; i < 4; i++) rawQuat[i] = -rawQuat[i];
+            }
         }
-        float delta = currentRoll - neutralRoll;
-        while (delta > Math.PI) delta -= (float) (2 * Math.PI);
-        while (delta < -Math.PI) delta += (float) (2 * Math.PI);
-        gyroSteer = finite(delta / (float) Math.toRadians(45));
+        System.arraycopy(rawQuat, 0, currentQuat, 0, 4);
+        hasLastQuat = true;
+
+        if (!hasNeutral) {
+            System.arraycopy(currentQuat, 0, neutralQuat, 0, 4);
+            hasNeutral = true;
+            unwrappedWheelRad = 0f;
+            smoothedWheelDeg = 0f;
+            gyroSteer = 0f;
+            if (controllerPad != null) controllerPad.setDisplayedGyroSteer(0f);
+            return;
+        }
+
+        // Swing-Twist around screen normal (+Z): clockwise rotation = positive right steer.
+        float rw = neutralQuat[0] * currentQuat[0] + neutralQuat[1] * currentQuat[1]
+                + neutralQuat[2] * currentQuat[2] + neutralQuat[3] * currentQuat[3];
+        float rz = neutralQuat[0] * currentQuat[3] - neutralQuat[1] * currentQuat[2]
+                + neutralQuat[2] * currentQuat[1] - neutralQuat[3] * currentQuat[0];
+
+        float rawTwistRad = wrapAnglePi(-2f * (float) Math.atan2(rz, rw));
+        int turns = Math.round((unwrappedWheelRad - rawTwistRad) / TWO_PI);
+        unwrappedWheelRad = rawTwistRad + turns * TWO_PI;
+
+        float maxTrack = Math.max(wheelMaxDeg * 1.5f, 270f);
+        float targetDeg = Math.max(-maxTrack, Math.min(maxTrack, (float) Math.toDegrees(unwrappedWheelRad)));
+
+        smoothedWheelDeg += (targetDeg - smoothedWheelDeg) * 0.42f;
+        float deadDeg = 1.5f;
+        float absDeg = Math.abs(smoothedWheelDeg);
+        float effectiveDeg = absDeg <= deadDeg
+                ? 0f
+                : Math.signum(smoothedWheelDeg) * Math.min(
+                        wheelMaxDeg,
+                        (absDeg - deadDeg) * (wheelMaxDeg / Math.max(1f, wheelMaxDeg - deadDeg))
+                );
+
+        gyroSteer = finite(effectiveDeg / wheelMaxDeg);
         if (controllerPad != null) {
             controllerPad.setDisplayedGyroSteer(gyroSteer);
         }
+    }
+
+    private static float wrapAnglePi(float rad) {
+        while (rad > Math.PI) rad -= TWO_PI;
+        while (rad <= -Math.PI) rad += TWO_PI;
+        return rad;
     }
 
     @Override

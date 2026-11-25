@@ -1,6 +1,6 @@
 # Pocket Controller
 
-**Version:** 0.1.0-beta.2 (pre-release)
+**Version:** 0.1.0-beta.3 (pre-release)
 
 An original phone-to-PC game controller inspired by Gyropad's workflow. The Android app sends Gamepad or Racepad input to the Windows companion over a local network. The PC can expose a virtual Xbox 360 XInput controller or a vJoy DirectInput device.
 

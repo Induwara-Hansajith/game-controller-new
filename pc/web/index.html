@@ -410,7 +410,7 @@
       </div>
       <div class="badge-bar">
         <div class="tag">
-          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.2</span>
+          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.3</span>
         </div>
         <div class="tag">
           <span id="dot" class="pulse-dot"></span>
@@ -547,7 +547,7 @@
     </div>
 
     <footer>
-      <span>Pocket Controller v0.1.0-beta.2 · Local TCP Protocol</span>
+      <span>Pocket Controller v0.1.0-beta.3 · Local TCP Protocol</span>
       <span>Low Latency Touch & Tilt Emulation</span>
     </footer>
   </div>
@@ -624,7 +624,8 @@
 
         // Steering Wheel Angle
         const steer = Math.max(-1, Math.min(1, parseFloat(data.steer) || 0));
-        const deg = Math.round(steer * 45);
+        const hasDeg = data.steer_deg !== null && data.steer_deg !== undefined && Number.isFinite(Number(data.steer_deg));
+        const deg = Math.round(hasDeg ? Number(data.steer_deg) : steer * 90);
         const wheel = document.getElementById('wheelGraphic');
         wheel.style.transform = `rotate(${deg}deg)`;
         wheel.classList.toggle('active', isLive && Math.abs(steer) > 0.05);
