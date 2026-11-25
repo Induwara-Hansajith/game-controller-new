@@ -157,6 +157,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def start_dashboard() -> ThreadingHTTPServer:
+    ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), DashboardHandler)
     threading.Thread(target=server.serve_forever, name="controller-dashboard", daemon=True).start()
     return server
