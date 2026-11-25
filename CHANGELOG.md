@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-beta.5 - Stable auto-reconnect, smoother UDP streaming & customizable button layout
+
+### Android mobile app
+
+- **Dropped-connection resilience:** added low-latency `WifiManager.WifiLock` (`WIFI_MODE_FULL_LOW_LATENCY`), TCP `SO_KEEPALIVE`, active socket reader & ping/pong heartbeat, silent exponential-backoff auto-reconnect (`RECONNECTING…` HUD state), and moved socket disconnect from `onPause()` to `onStop()` so system overlays/notifications do not break active sessions.
+- **Smoother low-latency response:** added authenticated UDP fast-path input streaming (`125Hz` active / `25Hz` idle, `4ms` immediate wake) with automatic TCP fallback, zero-allocation JSON serialization, tuned One-Euro steering filter (`9Hz` base cutoff, `0.0015` step resolution), smooth touch-to-gyro wheel blend synced to the PC, circular analog thumbstick clamping, and dedicated `L3`/`R3` buttons (eliminating accidental stick clicks on touch).
+- **Customizable buttons (rearrange & resize):** added full **Edit Layout Mode** (`✎ EDIT` in the top bar or via Setup) for both Racepad and Gamepad modes — drag any button, pedal, stick, D-pad, or steering wheel to rearrange it, resize with the corner handle, 2-finger pinch, or `−`/`+` bar (`55%–200%`), toggle snap-to-grid with center guides, reset single items or full layouts, and persist layouts automatically.
+
+### Windows PC companion
+
+- Added authenticated UDP fast-path receiver (`port 8766`) alongside TCP pairing/keepalive (`SO_KEEPALIVE`, `SIO_KEEPALIVE_VALS`), sequence ordering to drop stale out-of-order datagrams, ping/pong dead-peer cleanup, explicit `bye` teardown, and a 3.5s grace window on transient drops so virtual controllers do not flicker off during auto-reconnect.
+- Cached redundant `vJoy` and `Xbox 360 XInput` report writes to reduce driver overhead at 125Hz, and bumped desktop & web cockpit HUD polling to 60Hz (`16ms` when connected).
+
 ## 0.1.0-beta.4 - Smoother response & non-overlapping key bindings
 
 ### Android mobile app

@@ -218,7 +218,7 @@
       position: relative;
       display: grid;
       place-items: center;
-      transition: transform 0.04s linear;
+      transition: none;
     }
     .wheel-rim-glow {
       position: absolute;
@@ -322,7 +322,7 @@
       background: linear-gradient(90deg, #06b6d4, #10b981);
       box-shadow: 0 0 16px var(--emerald-glow);
       border-radius: inherit;
-      transition: width 0.08s linear;
+      transition: none;
     }
     .meter-fill-brake {
       height: 100%;
@@ -330,17 +330,17 @@
       background: linear-gradient(90deg, #f43f5e, #fb7185);
       box-shadow: 0 0 16px var(--rose-glow);
       border-radius: inherit;
-      transition: width 0.08s linear;
+      transition: none;
     }
     .meter-fill-clutch {
       height: 100%; width: 0%;
       background: linear-gradient(90deg, #f59e0b, #fbbf24);
-      border-radius: inherit; transition: width 0.08s linear;
+      border-radius: inherit; transition: none;
     }
     .meter-fill-handbrake {
       height: 100%; width: 0%;
       background: linear-gradient(90deg, #0284c7, #38bdf8);
-      border-radius: inherit; transition: width 0.08s linear;
+      border-radius: inherit; transition: none;
     }
     .stick-readout {
       display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px;
@@ -410,7 +410,7 @@
       </div>
       <div class="badge-bar">
         <div class="tag">
-          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.4</span>
+          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.5</span>
         </div>
         <div class="tag">
           <span id="dot" class="pulse-dot"></span>
@@ -547,7 +547,7 @@
     </div>
 
     <footer>
-      <span>Pocket Controller v0.1.0-beta.4 · Local TCP Protocol</span>
+      <span>Pocket Controller v0.1.0-beta.5 · Local UDP/TCP Low-Latency Protocol</span>
       <span>Low Latency Touch & Tilt Emulation</span>
     </footer>
   </div>
@@ -601,7 +601,8 @@
         const isLive = Boolean(data.connected);
         document.getElementById('dot').className = isLive ? 'pulse-dot live' : 'pulse-dot';
         document.getElementById('connectionText').innerText = isLive ? 'Controller Active' : 'Waiting for connection';
-        document.getElementById('deviceModel').innerText = isLive ? (data.phone || 'Phone') : 'Standby';
+        const tr = data.transport ? ' · ' + String(data.transport).toUpperCase() : '';
+        document.getElementById('deviceModel').innerText = isLive ? ((data.phone || 'Phone') + tr) : 'Standby';
 
         // Address & PIN
         const addresses = data.addresses || [];
@@ -674,9 +675,11 @@
       }
     }
 
+    let lastLive = false;
     async function pollLoop() {
       await poll();
-      setTimeout(pollLoop, 33);
+      lastLive = document.getElementById('dot').classList.contains('live');
+      setTimeout(pollLoop, lastLive ? 16 : 60);
     }
     pollLoop();
   </script>

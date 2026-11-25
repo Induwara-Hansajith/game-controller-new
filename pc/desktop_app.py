@@ -18,7 +18,7 @@ from tkinter import ttk
 
 
 APP_DIR = Path(__file__).resolve().parent
-VERSION = "0.1.0-beta.4"
+VERSION = "0.1.0-beta.5"
 
 
 def run_receiver() -> None:
@@ -37,6 +37,8 @@ class PocketControllerApp:
 
         self.receiver: subprocess.Popen | None = None
         self.closed = False
+        self._is_connected = False
+        self._last_wheel_key: tuple[float, bool] | None = None
         self._http_conn: http.client.HTTPConnection | None = None
 
         self.address_var = tk.StringVar(value="Discovering LAN…")
@@ -271,10 +273,14 @@ class PocketControllerApp:
         canvas = tk.Canvas(row, height=12, bg="#1a1426", highlightthickness=1, highlightbackground="#2e253e")
         canvas.pack(fill="x", pady=(3, 0))
 
-        return {"canvas": canvas, "label": val_lbl, "color": c1}
+        return {"canvas": canvas, "label": val_lbl, "color": c1, "last_pct": -1}
 
     def _update_meter(self, meter: dict, pct: float) -> None:
         pct = max(0.0, min(1.0, pct))
+        pct_int = round(pct * 1000)
+        if meter.get("last_pct") == pct_int:
+            return
+        meter["last_pct"] = pct_int
         c = meter["canvas"]
         c.delete("fill")
         w = c.winfo_width()
@@ -284,6 +290,11 @@ class PocketControllerApp:
         meter["label"].configure(text=f"{round(pct * 100)}%")
 
     def _draw_wheel(self, steer: float, steer_deg: float | None = None) -> None:
+        deg = steer_deg if steer_deg is not None else (steer * 90.0)
+        wheel_key = (round(deg, 2), abs(steer) > 0.05)
+        if wheel_key == self._last_wheel_key:
+            return
+        self._last_wheel_key = wheel_key
         c = self.wheel_canvas
         c.delete("all")
 
@@ -294,7 +305,6 @@ class PocketControllerApp:
                      start=0, extent=180, style="arc", outline="#292038", width=4)
 
         # Rotate wheel angle
-        deg = steer_deg if steer_deg is not None else (steer * 90.0)
         rad = math.radians(deg)
 
         # Rim
@@ -368,7 +378,7 @@ class PocketControllerApp:
         if self.closed:
             return
         self._load_status()
-        self.root.after(33, self.refresh)
+        self.root.after(16 if self._is_connected else 45, self.refresh)
 
     def _load_status(self) -> None:
         try:
@@ -397,13 +407,16 @@ class PocketControllerApp:
         self.pin_var.set(str(data.get("pin", "------")))
 
         connected = bool(data.get("connected"))
+        self._is_connected = connected
         self.connection_var.set("Controller Connected & Active" if connected else "Waiting for Phone Connection")
         self.dot.configure(fg="#10b981" if connected else "#f59e0b")
 
         phone_name = data.get("phone") or ""
         msg = data.get("message") or ""
+        transport = str(data.get("transport") or "").upper()
         if connected:
-            self.phone_var.set(f"Phone: {phone_name}   ·   {msg}")
+            suffix = f"   ·   {transport} fast-path" if transport == "UDP" else ""
+            self.phone_var.set(f"Phone: {phone_name}   ·   {msg}{suffix}")
         else:
             self.phone_var.set("Connect phone to same Wi-Fi and open Pocket Controller app (auto-discovery active).")
 

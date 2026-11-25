@@ -1,6 +1,6 @@
 # Pocket Controller
 
-**Version:** 0.1.0-beta.4 (pre-release)
+**Version:** 0.1.0-beta.5 (pre-release)
 
 An original phone-to-PC game controller inspired by Gyropad's workflow. The Android app sends Gamepad or Racepad input to the Windows companion over a local network. The PC can expose a virtual Xbox 360 XInput controller or a vJoy DirectInput device.
 
@@ -22,4 +22,4 @@ An original phone-to-PC game controller inspired by Gyropad's workflow. The Andr
 4. Open the Android app on the same trusted private Wi-Fi network. It can auto-detect the PC; you can also enter its address and PIN manually.
 5. Tap **Center** with the phone held in its neutral position, then keep both apps open.
 
-The receiver uses a local TCP connection and supports one phone at a time. It does not change Firewall settings. Auto selects XInput for Gamepad mode and vJoy for Racepad mode when available, with fallback to the other installed backend. See [CHANGELOG.md](CHANGELOG.md) for pre-release limits.
+The receiver pairs over local TCP and streams low-latency inputs over UDP (with automatic TCP fallback and reconnect), supporting one phone at a time. It does not change Firewall settings. Auto selects XInput for Gamepad mode and vJoy for Racepad mode when available, with fallback to the other installed backend. See [CHANGELOG.md](CHANGELOG.md) for pre-release limits.

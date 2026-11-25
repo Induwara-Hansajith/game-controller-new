@@ -53,7 +53,15 @@ class VJoyDevice:
         self._set_cont_pov = None
         self._set_disc_pov = None
         self._error: str | None = None
+        self._last_axes: dict[int, int] = {}
+        self._last_buttons: dict[int, int] = {}
+        self._last_pov: int | None = None
         self._load()
+
+    def _reset_cache(self) -> None:
+        self._last_axes.clear()
+        self._last_buttons.clear()
+        self._last_pov = None
 
     def _load(self) -> None:
         if os.name != "nt":
@@ -202,7 +210,10 @@ class VJoyDevice:
             return
         low, high = bounds
         value = round(low + ((self._clamp(normalized, -1.0, 1.0) + 1.0) * 0.5 * (high - low)))
+        if self._last_axes.get(usage) == value:
+            return
         self._dll.SetAxis(value, self.device_id, usage)
+        self._last_axes[usage] = value
 
     def apply(self, data: dict) -> None:
         if not self._acquired or self._dll is None:
@@ -235,8 +246,10 @@ class VJoyDevice:
         if not isinstance(buttons, list):
             buttons = []
         for index in range(min(self._button_count, MAX_BUTTONS)):
-            pressed = index < len(buttons) and bool(buttons[index])
-            self._dll.SetBtn(int(pressed), self.device_id, index + 1)
+            pressed = int(index < len(buttons) and bool(buttons[index]))
+            if self._last_buttons.get(index) != pressed:
+                self._dll.SetBtn(pressed, self.device_id, index + 1)
+                self._last_buttons[index] = pressed
         self._set_pov(data.get("dpad", {}))
 
     @staticmethod
@@ -259,15 +272,22 @@ class VJoyDevice:
         }
         angle = angle_by_direction.get(direction) if direction else None
         if self._continuous_pov_count and self._set_cont_pov is not None:
-            self._set_cont_pov(0xFFFFFFFF if angle is None else angle, self.device_id, 1)
+            pov_val = 0xFFFFFFFF if angle is None else angle
+            if self._last_pov != pov_val:
+                self._set_cont_pov(pov_val, self.device_id, 1)
+                self._last_pov = pov_val
         elif self._discrete_pov_count and self._set_disc_pov is not None:
             discrete = {0: 0, 4500: 1, 9000: 2, 13500: 3, 18000: 4,
                         22500: 5, 27000: 6, 31500: 7}
-            self._set_disc_pov(-1 if angle is None else discrete[angle], self.device_id, 1)
+            pov_val = -1 if angle is None else discrete[angle]
+            if self._last_pov != pov_val:
+                self._set_disc_pov(pov_val, self.device_id, 1)
+                self._last_pov = pov_val
 
     def neutral(self) -> None:
         if not self._acquired:
             return
+        self._reset_cache()
         self.apply({"steer": 0.0, "throttle": 0.0, "brake": 0.0, "clutch": 0.0,
                     "handbrake": 0.0, "lx": 0.0, "ly": 0.0, "rx": 0.0, "ry": 0.0,
                     "lt": 0.0, "rt": 0.0, "buttons": [], "dpad": {}})
@@ -281,6 +301,7 @@ class VJoyDevice:
             except Exception:
                 pass
         self._acquired = False
+        self._reset_cache()
 
 
 class Xbox360Device:
@@ -291,6 +312,7 @@ class Xbox360Device:
         self._vg = None
         self._acquired = False
         self._error: str | None = None
+        self._last_report_key: tuple | None = None
 
     def _load(self) -> bool:
         if self._vg is not None:
@@ -331,6 +353,7 @@ class Xbox360Device:
                 raise ControllerUnavailable(self._error or "ViGEmBus is unavailable.")
             self._pad = self._vg.VX360Gamepad()
             self._acquired = True
+            self._last_report_key = None
             self.neutral()
         except Exception as exc:
             self._error = str(exc)
@@ -370,11 +393,6 @@ class Xbox360Device:
             lt = clamp(data.get("brake", 0.0), 0.0, 1.0)
             rt = clamp(data.get("throttle", 0.0), 0.0, 1.0)
 
-        pad.left_joystick_float(x_value_float=lx, y_value_float=ly)
-        pad.right_joystick_float(x_value_float=rx, y_value_float=ry)
-        pad.left_trigger_float(value_float=lt)
-        pad.right_trigger_float(value_float=rt)
-
         buttons = data.get("buttons", [])
         if not isinstance(buttons, list):
             buttons = []
@@ -403,6 +421,26 @@ class Xbox360Device:
             "right": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
         }
         pressed.update(dpad_map[name] for name in dpad)
+
+        w_buttons = 0
+        for flag in pressed:
+            w_buttons |= int(flag)
+        report_key = (
+            round(lx * 32767),
+            round(ly * 32767),
+            round(rx * 32767),
+            round(ry * 32767),
+            round(lt * 255),
+            round(rt * 255),
+            w_buttons,
+        )
+        if report_key == self._last_report_key:
+            return
+
+        pad.left_joystick_float(x_value_float=lx, y_value_float=ly)
+        pad.right_joystick_float(x_value_float=rx, y_value_float=ry)
+        pad.left_trigger_float(value_float=lt)
+        pad.right_trigger_float(value_float=rt)
         for flag in all_flags | set(dpad_map.values()):
             if flag in pressed:
                 pad.press_button(button=flag)
@@ -410,10 +448,12 @@ class Xbox360Device:
                 pad.release_button(button=flag)
 
         pad.update()
+        self._last_report_key = report_key
 
     def neutral(self) -> None:
         if not self._acquired or self._pad is None:
             return
+        self._last_report_key = None
         pad = self._pad
         pad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
         pad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
@@ -423,6 +463,7 @@ class Xbox360Device:
         pad.update()
 
     def close(self) -> None:
+        self._last_report_key = None
         if self._pad is not None:
             try:
                 self.neutral()
