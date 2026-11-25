@@ -29,7 +29,7 @@ STALE_TIMEOUT_SEC = 0.45
 HEARTBEAT_TIMEOUT_SEC = 6.0
 DISCONNECT_GRACE_SEC = 3.5
 PAIRING_PIN = f"{secrets.randbelow(1_000_000):06d}"
-VERSION = "0.1.0-beta.5"
+VERSION = "0.1.0-beta.6"
 
 state_lock = threading.Lock()
 shutdown_event = threading.Event()

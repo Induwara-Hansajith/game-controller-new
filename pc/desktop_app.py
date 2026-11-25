@@ -18,7 +18,7 @@ from tkinter import ttk
 
 
 APP_DIR = Path(__file__).resolve().parent
-VERSION = "0.1.0-beta.5"
+VERSION = "0.1.0-beta.6"
 
 
 def run_receiver() -> None:

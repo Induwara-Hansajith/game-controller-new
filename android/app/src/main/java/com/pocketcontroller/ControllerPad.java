@@ -27,6 +27,9 @@ import java.util.Locale;
 public final class ControllerPad extends View {
     public static final int MODE_RACEPAD = 0;
     public static final int MODE_GAMEPAD = 1;
+    public static final int LAYOUT_RACEPAD = 0;
+    public static final int LAYOUT_GAMEPAD = 1;
+    public static final int LAYOUT_RACEPAD_GYRO = 2;
 
     private static final float MIN_SCALE = 0.55f;
     private static final float MAX_SCALE = 2.0f;
@@ -116,6 +119,7 @@ public final class ControllerPad extends View {
     private float wheelMaxDeg = 90f;
 
     private final List<ControlItem> raceItems = new ArrayList<>();
+    private final List<ControlItem> raceGyroItems = new ArrayList<>();
     private final List<ControlItem> gpItems = new ArrayList<>();
 
     // Edit Mode state
@@ -217,6 +221,32 @@ public final class ControllerPad extends View {
         raceItems.add(new ControlItem("btn_a", "A", KIND_CIRCLE_BTN, 0, 0xff10b981, 0, 0.88f, 0.595f));
         raceItems.add(new ControlItem("dpad", "D-PAD", KIND_DPAD, -1, COLOR_ACCENT, 0, 0.88f, 0.885f));
 
+        raceGyroItems.clear();
+        raceGyroItems.add(new ControlItem("gear_down", "◀ GEAR DOWN", KIND_PILL_BTN, 4, COLOR_ACCENT, 0xffc4b5fd, 0.11f, 0.06f));
+        raceGyroItems.add(new ControlItem("cam", "CAM", KIND_PILL_BTN, 6, COLOR_ACCENT, 0xffcbd5e1, 0.255f, 0.06f));
+        raceGyroItems.add(new ControlItem("map", "MAP", KIND_PILL_BTN, 7, COLOR_ACCENT, 0xffcbd5e1, 0.345f, 0.06f));
+        raceGyroItems.add(new ControlItem("gear_up", "GEAR UP ▶", KIND_PILL_BTN, 5, COLOR_ACCENT, 0xffc4b5fd, 0.88f, 0.06f));
+
+        raceGyroItems.add(new ControlItem("lights", "LIGHTS", KIND_PILL_BTN, 10, COLOR_ACCENT, 0xff94a3b8, 0.065f, 0.945f));
+        raceGyroItems.add(new ControlItem("horn", "HORN", KIND_PILL_BTN, 9, COLOR_ACCENT, 0xff94a3b8, 0.17f, 0.945f));
+        raceGyroItems.add(new ControlItem("wipers", "WIPERS", KIND_PILL_BTN, 11, COLOR_ACCENT, 0xff94a3b8, 0.275f, 0.945f));
+        raceGyroItems.add(new ControlItem("ign", "IGN", KIND_PILL_BTN, 12, COLOR_ACCENT, 0xff94a3b8, 0.38f, 0.945f));
+
+        raceGyroItems.add(new ControlItem("brake", "BRAKE", KIND_PEDAL, -1, COLOR_BRAKE, 0xffbe123c, 0.155f, 0.485f));
+        raceGyroItems.add(new ControlItem("clutch", "CLUTCH", KIND_PEDAL, -1, COLOR_CLUTCH, 0xffb45309, 0.415f, 0.485f));
+        raceGyroItems.add(new ControlItem("gas", "GAS", KIND_PEDAL, -1, COLOR_THROTTLE, 0xff047857, 0.650f, 0.485f));
+
+        raceGyroItems.add(new ControlItem("handbrake", "HANDBRAKE", KIND_PILL_BTN, 15, 0xffe11d48, 0xfffda4af, 0.485f, 0.945f));
+        raceGyroItems.add(new ControlItem("nitro", "NITRO", KIND_PILL_BTN, 13, 0xffe11d48, 0xfffda4af, 0.57f, 0.945f));
+        raceGyroItems.add(new ControlItem("cruise", "CRUISE", KIND_PILL_BTN, 14, 0xffe11d48, 0xfffda4af, 0.65f, 0.945f));
+        raceGyroItems.add(new ControlItem("pit", "PIT", KIND_PILL_BTN, 8, 0xffe11d48, 0xfffda4af, 0.73f, 0.945f));
+
+        raceGyroItems.add(new ControlItem("btn_y", "Y", KIND_CIRCLE_BTN, 3, 0xfff59e0b, 0, 0.88f, 0.295f));
+        raceGyroItems.add(new ControlItem("btn_x", "X", KIND_CIRCLE_BTN, 2, 0xff06b6d4, 0, 0.822f, 0.445f));
+        raceGyroItems.add(new ControlItem("btn_b", "B", KIND_CIRCLE_BTN, 1, 0xfff43f5e, 0, 0.938f, 0.445f));
+        raceGyroItems.add(new ControlItem("btn_a", "A", KIND_CIRCLE_BTN, 0, 0xff10b981, 0, 0.88f, 0.595f));
+        raceGyroItems.add(new ControlItem("dpad", "D-PAD", KIND_DPAD, -1, COLOR_ACCENT, 0, 0.88f, 0.885f));
+
         gpItems.clear();
         gpItems.add(new ControlItem("lb", "LB (BUMPER)", KIND_PILL_BTN, 4, COLOR_ACCENT, 0xffc4b5fd, 0.105f, 0.06f));
         gpItems.add(new ControlItem("lt", "LT", KIND_TRIGGER, -1, COLOR_BRAKE, 0, 0.265f, 0.06f));
@@ -240,12 +270,19 @@ public final class ControllerPad extends View {
         gpItems.add(new ControlItem("btn_a", "A", KIND_CIRCLE_BTN, 0, 0xff10b981, 0, 0.86f, 0.66f));
     }
 
-    private List<ControlItem> itemsForMode(int mode) {
-        return mode == MODE_RACEPAD ? raceItems : gpItems;
+    private int activeLayoutId() {
+        if (currentMode == MODE_GAMEPAD) return LAYOUT_GAMEPAD;
+        return gyroEnabled ? LAYOUT_RACEPAD_GYRO : LAYOUT_RACEPAD;
+    }
+
+    private List<ControlItem> itemsForMode(int layoutId) {
+        if (layoutId == LAYOUT_GAMEPAD) return gpItems;
+        if (layoutId == LAYOUT_RACEPAD_GYRO) return raceGyroItems;
+        return raceItems;
     }
 
     private List<ControlItem> activeItems() {
-        return itemsForMode(currentMode);
+        return itemsForMode(activeLayoutId());
     }
 
     public void setListener(Listener value) {
@@ -337,32 +374,44 @@ public final class ControllerPad extends View {
         } catch (Exception ignored) {}
     }
 
-    public void resetLayout(int mode) {
-        for (ControlItem item : itemsForMode(mode)) {
+    public void resetLayout(int layoutId) {
+        for (ControlItem item : itemsForMode(layoutId)) {
             item.reset();
         }
-        if (mode == currentMode) {
+        if (layoutId == activeLayoutId()) {
             guideCenterX = false;
             guideCenterY = false;
         }
-        notifyLayoutChanged(mode);
+        notifyLayoutChanged(layoutId);
         postInvalidateOnAnimation();
     }
 
     public void resetAllLayouts() {
-        resetLayout(MODE_RACEPAD);
-        resetLayout(MODE_GAMEPAD);
+        resetLayout(LAYOUT_RACEPAD);
+        resetLayout(LAYOUT_RACEPAD_GYRO);
+        resetLayout(LAYOUT_GAMEPAD);
     }
 
-    private void notifyLayoutChanged(int mode) {
+    private void notifyLayoutChanged(int layoutId) {
         if (listener != null) {
-            String modeName = mode == MODE_RACEPAD ? "racepad" : "gamepad";
-            listener.onLayoutChanged(modeName, exportLayoutJson(mode));
+            String modeName = layoutId == LAYOUT_GAMEPAD
+                    ? "gamepad"
+                    : (layoutId == LAYOUT_RACEPAD_GYRO ? "racepad_gyro" : "racepad");
+            listener.onLayoutChanged(modeName, exportLayoutJson(layoutId));
         }
     }
 
     public void setGyroEnabled(boolean enabled) {
+        if (this.gyroEnabled == enabled) return;
         this.gyroEnabled = enabled;
+        selectedItem = null;
+        editDragMode = 0;
+        editPointerId = MotionEvent.INVALID_POINTER_ID;
+        if (enabled) {
+            steeringTouch = false;
+            blendingFromTouch = false;
+            steerPointerId = MotionEvent.INVALID_POINTER_ID;
+        }
         postInvalidateOnAnimation();
     }
 
@@ -432,6 +481,9 @@ public final class ControllerPad extends View {
                         ? Math.min(dp(17.5f), ph * 0.068f)
                         : Math.min(dp(22.5f), ph * 0.082f);
             case KIND_PEDAL:
+                if (currentMode == MODE_RACEPAD && gyroEnabled && ("brake".equals(item.id) || "gas".equals(item.id))) {
+                    return w * 0.098f;
+                }
                 return w * 0.041f;
             case KIND_TRIGGER:
                 return w * 0.065f;
@@ -581,14 +633,38 @@ public final class ControllerPad extends View {
         int connColor = connected ? 0xff34d399 : (reconnecting ? 0xfffbbf24 : 0xffcbd5e1);
         drawText(canvas, connStr, padX + dp(20), top + barH / 2f + dp(3.5f), 10f, connColor, Paint.Align.LEFT, true);
 
-        // Center Pill: Mode Switcher (centered cleanly in remaining space)
+        // Center Pill: Mode Switcher (with live gyro angle gauge when virtual wheel is hidden)
         float availCenter = (editL - badgeR) - gap * 2f;
-        float modeW = Math.min(clamp(w * 0.21f, dp(112), dp(144)), Math.max(dp(96), availCenter));
+        float modeW = Math.min(clamp(w * 0.24f, dp(122), dp(170)), Math.max(dp(98), availCenter));
         float modeL = badgeR + (editL - badgeR - modeW) / 2f;
         rectTmp.set(modeL, top, modeL + modeW, top + barH);
         drawPill(canvas, rectTmp, 0xff1e182a, COLOR_ACCENT);
-        String modeName = currentMode == MODE_RACEPAD ? "🏎 RACEPAD" : "🎮 GAMEPAD";
-        drawText(canvas, modeName, rectTmp.centerX(), top + barH / 2f + dp(3.5f), 11f, 0xffe9d5ff, Paint.Align.CENTER, true);
+        if (currentMode == MODE_RACEPAD && gyroEnabled) {
+            int deg = Math.round(displayWheelDeg);
+            String degText = (deg > 0 ? "+" : "") + deg + "°";
+            drawText(canvas, "🏎 RACE · " + degText, rectTmp.centerX(), top + barH / 2f + dp(1.5f), 10.2f, 0xffe9d5ff, Paint.Align.CENTER, true);
+            float trackL = modeL + dp(16);
+            float trackR = modeL + modeW - dp(16);
+            float trackY = top + barH - dp(6);
+            float midX = (trackL + trackR) * 0.5f;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2.6f));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(0xff2c223f);
+            canvas.drawLine(trackL, trackY, trackR, trackY, paint);
+            float steerVal = clamp(displayWheelDeg / Math.max(1f, wheelMaxDeg), -1f, 1f);
+            float tipX = midX + steerVal * (trackR - midX);
+            if (Math.abs(steerVal) > 0.02f) {
+                paint.setColor(Math.abs(steerVal) > 0.72f ? COLOR_CYAN : COLOR_ACCENT);
+                canvas.drawLine(midX, trackY, tipX, trackY, paint);
+            }
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xfff59e0b);
+            canvas.drawCircle(midX, trackY, dp(1.8f), paint);
+        } else {
+            String modeName = currentMode == MODE_RACEPAD ? "🏎 RACEPAD" : "🎮 GAMEPAD";
+            drawText(canvas, modeName, rectTmp.centerX(), top + barH / 2f + dp(3.5f), 11f, 0xffe9d5ff, Paint.Align.CENTER, true);
+        }
 
         // Right Pills: Edit, Center, Setup
         rectTmp.set(editL, top, editL + editW, top + barH);
@@ -642,7 +718,7 @@ public final class ControllerPad extends View {
             title = selectedItem.label + " · " + Math.round(selectedItem.scale * 100f) + "%";
             titleColor = 0xff38bdf8;
         } else {
-            title = "EDIT " + (currentMode == MODE_RACEPAD ? "RACEPAD" : "GAMEPAD") + " · DRAG OR PINCH";
+            title = "EDIT " + (currentMode == MODE_GAMEPAD ? "GAMEPAD" : (gyroEnabled ? "RACEPAD (GYRO)" : "RACEPAD (WHEEL)")) + " · DRAG OR PINCH";
             titleColor = 0xffe9d5ff;
         }
         rectTmp.set(dp(10), top, r[0] - dp(8), top + barH);
@@ -1487,7 +1563,7 @@ public final class ControllerPad extends View {
 
         if (action == MotionEvent.ACTION_POINTER_UP) {
             if (editDragMode == 3 && event.getPointerCount() <= 2) {
-                notifyLayoutChanged(currentMode);
+                notifyLayoutChanged(activeLayoutId());
                 editDragMode = 0;
                 editPointerId = MotionEvent.INVALID_POINTER_ID;
             }
@@ -1496,7 +1572,7 @@ public final class ControllerPad extends View {
 
         if (action == MotionEvent.ACTION_UP) {
             if (editDragMode != 0) {
-                notifyLayoutChanged(currentMode);
+                notifyLayoutChanged(activeLayoutId());
             }
             editDragMode = 0;
             editPointerId = MotionEvent.INVALID_POINTER_ID;
@@ -1515,13 +1591,13 @@ public final class ControllerPad extends View {
         if (x >= r[0] && x <= r[1]) {
             if (selectedItem != null) {
                 selectedItem.scale = clamp(Math.round((selectedItem.scale - 0.1f) * 20f) / 20f, MIN_SCALE, MAX_SCALE);
-                notifyLayoutChanged(currentMode);
+                notifyLayoutChanged(activeLayoutId());
                 invalidate();
             }
         } else if (x >= r[2] && x <= r[3]) {
             if (selectedItem != null) {
                 selectedItem.scale = clamp(Math.round((selectedItem.scale + 0.1f) * 20f) / 20f, MIN_SCALE, MAX_SCALE);
-                notifyLayoutChanged(currentMode);
+                notifyLayoutChanged(activeLayoutId());
                 invalidate();
             }
         } else if (x >= r[4] && x <= r[5]) {
@@ -1530,11 +1606,11 @@ public final class ControllerPad extends View {
         } else if (x >= r[6] && x <= r[7]) {
             if (selectedItem != null) {
                 selectedItem.reset();
-                notifyLayoutChanged(currentMode);
+                notifyLayoutChanged(activeLayoutId());
                 invalidate();
             }
         } else if (x >= r[8] && x <= r[9]) {
-            resetLayout(currentMode);
+            resetLayout(activeLayoutId());
         } else if (x >= r[10] && x <= r[11]) {
             setEditMode(false);
         }
@@ -1657,7 +1733,7 @@ public final class ControllerPad extends View {
         }
 
         float availCenter = (editL - badgeR) - gap * 2f;
-        float modeW = Math.min(clamp(w * 0.21f, dp(112), dp(144)), Math.max(dp(96), availCenter));
+        float modeW = Math.min(clamp(w * 0.24f, dp(122), dp(170)), Math.max(dp(98), availCenter));
         float modeL = badgeR + (editL - badgeR - modeW) / 2f;
         if (x >= modeL && x <= modeL + modeW) {
             currentMode = currentMode == MODE_RACEPAD ? MODE_GAMEPAD : MODE_RACEPAD;

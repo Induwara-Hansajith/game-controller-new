@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.6 - Gyro Racepad layout with hidden wheel & wider left/right pedals
+
+### Android mobile app
+
+- **Gyro Racepad layout:** when **Steering Wheel Rotation** is enabled, the on-screen virtual steering wheel is automatically hidden so it does not clutter the left thumb zone; the **Brake** pedal moves to the left side and both **Brake** and **Gas** pedals widen (`~2.4x` wider) for comfortable two-thumb control.
+- Added a compact live steering angle gauge inside the top `RACE` HUD pill when the virtual wheel is hidden, and saved custom gyro Racepad layouts separately (`layout_racepad_gyro_v1`) from touch-wheel Racepad and Gamepad layouts.
+
 ## 0.1.0-beta.5 - Stable auto-reconnect, smoother UDP streaming & customizable button layout
 
 ### Android mobile app

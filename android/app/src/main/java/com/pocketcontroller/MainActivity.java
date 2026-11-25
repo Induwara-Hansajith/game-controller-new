@@ -154,8 +154,9 @@ public final class MainActivity extends Activity implements SensorEventListener,
         gyroEnabled = rotationSensor != null && prefs.getBoolean("wheel_rotation_enabled", true);
         controllerPad.setWheelMaxDeg(wheelMaxDeg);
         controllerPad.setGyroEnabled(gyroEnabled);
-        controllerPad.importLayoutJson(ControllerPad.MODE_RACEPAD, prefs.getString("layout_racepad_v1", ""));
-        controllerPad.importLayoutJson(ControllerPad.MODE_GAMEPAD, prefs.getString("layout_gamepad_v1", ""));
+        controllerPad.importLayoutJson(ControllerPad.LAYOUT_RACEPAD, prefs.getString("layout_racepad_v1", ""));
+        controllerPad.importLayoutJson(ControllerPad.LAYOUT_RACEPAD_GYRO, prefs.getString("layout_racepad_gyro_v1", ""));
+        controllerPad.importLayoutJson(ControllerPad.LAYOUT_GAMEPAD, prefs.getString("layout_gamepad_v1", ""));
 
         discoveredHost = prefs.getString("last_host", "");
         discoveredPin = prefs.getString("last_pin", "");
@@ -374,7 +375,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
         TextView steerHint = new TextView(this);
         steerHint.setText(rotationSensor != null
-                ? "Rotate the phone left and right like a steering wheel (tilt ignored)."
+                ? "Rotate phone left/right like a wheel; hides on-screen wheel for wide left Brake & right Gas pedals."
                 : "No rotation sensor found; drag the virtual steering wheel on screen.");
         steerHint.setTextColor(0xff94a3b8);
         steerHint.setTextSize(11);
@@ -442,10 +443,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
         });
         settingsCard.addView(customizeBtn, new LinearLayout.LayoutParams(-1, dp(40)));
 
-        Button resetLayoutBtn = createOutlineButton("↺ Reset Both Layouts to Default");
+        Button resetLayoutBtn = createOutlineButton("↺ Reset All Layouts to Default");
         resetLayoutBtn.setOnClickListener(v -> {
             controllerPad.resetAllLayouts();
-            dialogStatusText.setText("Racepad & Gamepad layouts reset to default!");
+            dialogStatusText.setText("All Racepad & Gamepad layouts reset to default!");
             dialogStatusText.setTextColor(0xff34d399);
         });
         settingsCard.addView(resetLayoutBtn, new LinearLayout.LayoutParams(-1, dp(40)));
