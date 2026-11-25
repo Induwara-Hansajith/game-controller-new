@@ -12,7 +12,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from controller import ControllerDevice, VJoyDevice, VJoyUnavailable
+from controller import ControllerDevice, ControllerUnavailable, VJoyUnavailable
 
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -26,13 +26,14 @@ INPUT_HOST, INPUT_PORT = "0.0.0.0", 8766
 DISCOVERY_PORT = 8767
 MAX_LINE_BYTES = 4096
 PAIRING_PIN = f"{secrets.randbelow(1_000_000):06d}"
-VERSION = "0.1.0-beta.1"
+VERSION = "0.1.0-beta.2"
 
 state_lock = threading.Lock()
 shutdown_event = threading.Event()
 active_writer: asyncio.StreamWriter | None = None
 phone_writers: set[asyncio.StreamWriter] = set()
 phone_handlers: set[asyncio.Task] = set()
+controller_device: ControllerDevice | None = None
 
 state = {
     "version": VERSION,
@@ -41,10 +42,24 @@ state = {
     "pin": PAIRING_PIN,
     "addresses": [],
     "vjoy": "Checking…",
+    "driver": "auto",
+    "active_driver": "",
+    "drivers": {},
+    "controller_mode": "racepad",
+    "driver_error": "",
     "message": "Waiting for phone",
     "steer": 0.0,
     "throttle": 0.0,
     "brake": 0.0,
+    "clutch": 0.0,
+    "handbrake": 0.0,
+    "lx": 0.0,
+    "ly": 0.0,
+    "rx": 0.0,
+    "ry": 0.0,
+    "lt": 0.0,
+    "rt": 0.0,
+    "dpad": {},
     "buttons": [],
     "last_packet": 0.0,
 }
@@ -60,6 +75,16 @@ def snapshot() -> dict:
         result = dict(state)
     result.pop("last_packet", None)
     return result
+
+
+def refresh_driver_state(device: ControllerDevice, **values: object) -> None:
+    update_state(
+        vjoy=device.description,
+        driver=device.selected_driver,
+        active_driver=device.active_driver or "",
+        drivers=device.drivers,
+        **values,
+    )
 
 
 def local_ipv4_addresses() -> list[str]:
@@ -149,8 +174,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/shutdown":
             self.do_GET()
+        elif self.path == "/mode":
+            self._set_driver()
         else:
             self.send_error(404)
+
+    def _json_response(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _set_driver(self) -> None:
+        if controller_device is None:
+            self._json_response(503, {"ok": False, "error": "Controller backend is not ready."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 1024:
+                raise ValueError("Expected a small JSON body with a driver field.")
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            driver = payload.get("driver") if isinstance(payload, dict) else None
+            controller_device.set_driver(str(driver or ""))
+        except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._json_response(400, {"ok": False, "error": str(exc)})
+            return
+        except (ControllerUnavailable, VJoyUnavailable) as exc:
+            self._json_response(409, {"ok": False, "error": str(exc)})
+            return
+        refresh_driver_state(
+            controller_device,
+            steer=0.0, throttle=0.0, brake=0.0, clutch=0.0, handbrake=0.0,
+            lx=0.0, ly=0.0, rx=0.0, ry=0.0, lt=0.0, rt=0.0,
+            dpad={}, buttons=[], driver_error="",
+        )
+        self._json_response(200, {"ok": True, "driver": controller_device.selected_driver})
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -178,12 +239,12 @@ async def send_json(writer: asyncio.StreamWriter, data: dict) -> None:
     await writer.drain()
 
 
-async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, device: VJoyDevice) -> None:
+async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, device: ControllerDevice) -> None:
     global active_writer
     peer = writer.get_extra_info("peername")
     phone_name = "Phone"
-    acquired = False
     authenticated = False
+    stale_applied = False
     task = asyncio.current_task()
     phone_writers.add(writer)
     if task is not None:
@@ -217,19 +278,16 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 pass
 
         phone_name = str(hello.get("name", "Phone"))[:48] or "Phone"
-        try:
-            device.acquire()
-            acquired = True
-        except VJoyUnavailable as exc:
-            # Keep the live dashboard and preview usable even if vJoy was busy
-            update_state(vjoy=str(exc), message="Connected for preview; vJoy is unavailable")
-
-        current_vjoy = device.description if acquired else snapshot()["vjoy"]
+        current_vjoy = device.description
         update_state(
             connected=True,
             phone=phone_name,
             message=f"Connected from {peer[0] if peer else 'phone'}",
             vjoy=current_vjoy,
+            driver=device.selected_driver,
+            active_driver=device.active_driver or "",
+            drivers=device.drivers,
+            driver_error="",
             last_packet=time.monotonic(),
         )
         await send_json(writer, {"type": "ready", "ok": True, "vjoy": current_vjoy})
@@ -240,10 +298,15 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             except asyncio.TimeoutError:
                 with state_lock:
                     stale = time.monotonic() - float(state["last_packet"]) > 0.35
-                if stale:
-                    if acquired:
-                        device.neutral()
-                    update_state(steer=0.0, throttle=0.0, brake=0.0, buttons=[])
+                if stale and not stale_applied:
+                    device.neutral()
+                    refresh_driver_state(
+                        device,
+                        steer=0.0, throttle=0.0, brake=0.0, clutch=0.0, handbrake=0.0,
+                        lx=0.0, ly=0.0, rx=0.0, ry=0.0, lt=0.0, rt=0.0,
+                        dpad={}, buttons=[], driver_error="",
+                    )
+                    stale_applied = True
                 continue
 
             if not raw or len(raw) > MAX_LINE_BYTES:
@@ -259,33 +322,67 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             buttons_value = packet.get("buttons", [])
             if not isinstance(buttons_value, list):
                 buttons_value = []
-            buttons = [bool(value) for value in buttons_value[:8]]
+            mode = str(packet.get("mode", "racepad")).strip().lower()
+            if mode not in ("gamepad", "racepad"):
+                mode = "racepad"
+            dpad_value = packet.get("dpad", {})
+            if not isinstance(dpad_value, (dict, str)):
+                dpad_value = {}
+            buttons = [bool(value) for value in buttons_value[:16]]
             values = {
-                "steer": clamp(packet.get("steer"), -1.0, 1.0),
+                "controller_mode": mode,
+                "steer": clamp(packet.get("steer", 0.0), -1.0, 1.0),
                 "throttle": clamp(packet.get("throttle"), 0.0, 1.0),
                 "brake": clamp(packet.get("brake"), 0.0, 1.0),
+                "clutch": clamp(packet.get("clutch"), 0.0, 1.0),
+                "handbrake": clamp(packet.get("handbrake"), 0.0, 1.0),
+                "lx": clamp(packet.get("lx", 0.0), -1.0, 1.0),
+                "ly": clamp(packet.get("ly", 0.0), -1.0, 1.0),
+                "rx": clamp(packet.get("rx", 0.0), -1.0, 1.0),
+                "ry": clamp(packet.get("ry", 0.0), -1.0, 1.0),
+                "lt": clamp(packet.get("lt"), 0.0, 1.0),
+                "rt": clamp(packet.get("rt"), 0.0, 1.0),
+                "dpad": dpad_value,
                 "buttons": buttons,
                 "last_packet": time.monotonic(),
             }
-            if acquired:
-                device.apply(values)
+            try:
+                device.apply({**values, "mode": mode})
+                values["driver_error"] = ""
+            except Exception as exc:
+                values["driver_error"] = str(exc)
+            values["driver"] = device.selected_driver
+            values["active_driver"] = device.active_driver or ""
+            values["drivers"] = device.drivers
+            values["vjoy"] = device.description if not values["driver_error"] else str(values["driver_error"])
             update_state(**values)
+            stale_applied = False
     except (asyncio.TimeoutError, ConnectionError, OSError):
         pass
     finally:
         if authenticated and active_writer is writer:
-            if acquired:
-                device.close()
+            device.close()
             active_writer = None
-            update_state(
+            refresh_driver_state(
+                device,
                 connected=False,
                 phone="",
                 message="Waiting for phone",
-                vjoy=device.description,
                 steer=0.0,
                 throttle=0.0,
                 brake=0.0,
+                clutch=0.0,
+                handbrake=0.0,
+                lx=0.0,
+                ly=0.0,
+                rx=0.0,
+                ry=0.0,
+                lt=0.0,
+                rt=0.0,
+                dpad={},
                 buttons=[],
+                driver_error="",
+                controller_mode="racepad",
                 last_packet=0.0,
             )
         writer.close()
@@ -349,10 +446,12 @@ async def check_shutdown(server: asyncio.Server) -> None:
 
 
 async def main() -> None:
+    global controller_device
     device = ControllerDevice()
+    controller_device = device
     vjoy_status = device.description
     addresses = local_ipv4_addresses()
-    update_state(vjoy=vjoy_status, addresses=addresses)
+    refresh_driver_state(device, addresses=addresses)
 
     dashboard = start_dashboard()
     try:
@@ -367,7 +466,7 @@ async def main() -> None:
     print(f"Phone port: {INPUT_PORT}")
     print(f"Pairing PIN: {PAIRING_PIN}")
     print("PC addresses: " + (", ".join(addresses) or "No LAN IPv4 address found"))
-    print(f"vJoy: {vjoy_status}")
+    print(f"Controller output: {vjoy_status}")
     print("Press Ctrl+C to stop.")
 
     shutdown_watcher = None
@@ -398,6 +497,12 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 pass
         device.close()
+        refresh_driver_state(
+            device,
+            connected=False, phone="", steer=0.0, throttle=0.0, brake=0.0,
+            clutch=0.0, handbrake=0.0, lx=0.0, ly=0.0, rx=0.0, ry=0.0,
+            lt=0.0, rt=0.0, dpad={}, buttons=[], driver_error="",
+        )
         dashboard.shutdown()
         dashboard.server_close()
 

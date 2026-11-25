@@ -17,7 +17,7 @@ from tkinter import ttk
 
 
 APP_DIR = Path(__file__).resolve().parent
-VERSION = "0.1.0-beta.1"
+VERSION = "0.1.0-beta.2"
 
 
 def run_receiver() -> None:
@@ -30,8 +30,8 @@ class PocketControllerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(f"Pocket Controller · Cockpit v{VERSION}")
-        self.root.geometry("820x680")
-        self.root.minsize(740, 620)
+        self.root.geometry("900x820")
+        self.root.minsize(800, 740)
         self.root.configure(bg="#07050b")
 
         self.receiver: subprocess.Popen | None = None
@@ -41,7 +41,11 @@ class PocketControllerApp:
         self.pin_var = tk.StringVar(value="------")
         self.connection_var = tk.StringVar(value="Starting receiver…")
         self.phone_var = tk.StringVar(value="Waiting for phone…")
-        self.vjoy_var = tk.StringVar(value="Checking vJoy device 1…")
+        self.vjoy_var = tk.StringVar(value="Checking controller drivers…")
+        self.driver_var = tk.StringVar(value="Auto")
+        self.mode_var = tk.StringVar(value="RACEPAD")
+        self.sticks_var = tk.StringVar(value="Sticks  L 0.00, 0.00   R 0.00, 0.00")
+        self.dpad_var = tk.StringVar(value="D-pad  -")
         self.message_var = tk.StringVar(value="Keep this window open while playing.")
         self.vjoy_badge_var = tk.StringVar(value="CHECKING")
         self.vjoy_badge_color = "#f59e0b"
@@ -49,7 +53,7 @@ class PocketControllerApp:
         self.current_steer = 0.0
         self.current_throttle = 0.0
         self.current_brake = 0.0
-        self.current_buttons = [False] * 8
+        self.current_buttons = [False] * 16
 
         self.button_widgets: list[tk.Label] = []
 
@@ -74,8 +78,25 @@ class PocketControllerApp:
         style.map("Outline.TButton", background=[("active", "#2a203d")])
 
     def _build(self) -> None:
-        outer = tk.Frame(self.root, bg="#07050b", padx=24, pady=20)
-        outer.pack(fill="both", expand=True)
+        viewport = tk.Frame(self.root, bg="#07050b")
+        viewport.pack(fill="both", expand=True)
+        self.scroll_canvas = tk.Canvas(viewport, bg="#07050b", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(viewport, orient="vertical", command=self.scroll_canvas.yview)
+        self.scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        self.scroll_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        outer = tk.Frame(self.scroll_canvas, bg="#07050b", padx=24, pady=20)
+        content_window = self.scroll_canvas.create_window((0, 0), window=outer, anchor="nw")
+        outer.bind(
+            "<Configure>",
+            lambda _event: self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all")),
+        )
+        self.scroll_canvas.bind(
+            "<Configure>",
+            lambda event: self.scroll_canvas.itemconfigure(content_window, width=event.width),
+        )
+        self.root.bind_all("<MouseWheel>", self._scroll_content)
 
         # 1. Top Header Row
         header = tk.Frame(outer, bg="#07050b")
@@ -139,10 +160,16 @@ class PocketControllerApp:
         right_panel = tk.Frame(hud_grid, bg="#120e1c", padx=16)
         right_panel.pack(side="left", fill="both", expand=True)
 
-        # Throttle Meter
-        self.throttle_bar = self._build_meter(right_panel, "THROTTLE (Y AXIS)", "#10b981", "#06b6d4")
-        # Brake Meter
-        self.brake_bar = self._build_meter(right_panel, "BRAKE (Z AXIS)", "#f43f5e", "#fb7185")
+        self.throttle_bar = self._build_meter(right_panel, "THROTTLE / RIGHT TRIGGER", "#10b981", "#06b6d4")
+        self.brake_bar = self._build_meter(right_panel, "BRAKE / LEFT TRIGGER", "#f43f5e", "#fb7185")
+        self.clutch_bar = self._build_meter(right_panel, "CLUTCH", "#f59e0b", "#fbbf24")
+        self.handbrake_bar = self._build_meter(right_panel, "HANDBRAKE", "#38bdf8", "#06b6d4")
+        tk.Label(right_panel, textvariable=self.sticks_var, fg="#cbd5e1", bg="#120e1c",
+                 font=("Consolas", 9)).pack(anchor="w", pady=(6, 0))
+        tk.Label(right_panel, textvariable=self.mode_var, fg="#a78bfa", bg="#120e1c",
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(6, 0))
+        tk.Label(right_panel, textvariable=self.dpad_var, fg="#cbd5e1", bg="#120e1c",
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
 
         # Buttons Matrix
         tk.Label(right_panel, text="CONTROLLER INPUTS", fg="#a78bfa", bg="#120e1c",
@@ -150,15 +177,18 @@ class PocketControllerApp:
 
         btn_row = tk.Frame(right_panel, bg="#120e1c")
         btn_row.pack(fill="x")
-        btn_names = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT"]
+        btn_names = ["A", "B", "X", "Y", "LB", "RB", "BACK", "START",
+                     "GUIDE", "L3", "R3", "P-L", "P-R", "GEAR+", "GEAR-", "AUX"]
         for idx, name in enumerate(btn_names):
             box = tk.Label(btn_row, text=f"{name}\n{idx+1}", bg="#181324", fg="#94a3b8", width=5, pady=4,
                            font=("Segoe UI Semibold", 8), highlightthickness=1, highlightbackground="#2e253e")
-            box.pack(side="left", padx=(0, 6))
+            box.grid(row=idx // 8, column=idx % 8, sticky="nsew", padx=3, pady=3)
             self.button_widgets.append(box)
+        for column in range(8):
+            btn_row.columnconfigure(column, weight=1)
 
         # 4. Virtual Device Card
-        vjoy_card = self._card(outer, "VIRTUAL CONTROLLER & UDP BEACON")
+        vjoy_card = self._card(outer, "VIRTUAL CONTROLLER OUTPUT")
         vjoy_row = tk.Frame(vjoy_card, bg="#120e1c")
         vjoy_row.pack(fill="x")
 
@@ -167,14 +197,34 @@ class PocketControllerApp:
         self.vjoy_badge.pack(side="left", padx=(0, 10))
 
         tk.Label(vjoy_row, textvariable=self.vjoy_var, fg="#f1f5f9", bg="#120e1c",
-                 font=("Segoe UI", 9)).pack(side="left")
+                 font=("Segoe UI", 9), wraplength=465, justify="left").pack(side="left", fill="x", expand=True)
+
+        selector = tk.Frame(vjoy_card, bg="#120e1c")
+        selector.pack(fill="x", pady=(12, 0))
+        tk.Label(selector, text="OUTPUT DRIVER", fg="#94a3b8", bg="#120e1c",
+                 font=("Segoe UI", 8, "bold")).pack(side="left", padx=(0, 10))
+        self.driver_select = ttk.Combobox(
+            selector, textvariable=self.driver_var, state="readonly", width=25,
+            values=("Auto", "Xbox 360 (XInput)", "vJoy (Sim Wheel)"),
+        )
+        self.driver_select.pack(side="left")
+        self.driver_select.bind("<<ComboboxSelected>>", self._change_driver)
 
         sub_info = tk.Frame(vjoy_card, bg="#120e1c")
         sub_info.pack(fill="x", pady=(6, 0))
-        tk.Label(sub_info, text="UDP Beacon: Broadcasting on port 8767 for automatic phone discovery",
+        tk.Label(sub_info, text="Auto chooses XInput for Gamepad mode and vJoy for Racepad mode when available. UDP discovery uses port 8767.",
                  fg="#64748b", bg="#120e1c", font=("Segoe UI", 8)).pack(anchor="w")
 
         self._draw_wheel(0.0)
+
+    def _scroll_content(self, event: tk.Event) -> str | None:
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        while widget is not None and widget is not self.scroll_canvas:
+            widget = getattr(widget, "master", None)
+        if widget is None:
+            return None
+        self.scroll_canvas.yview_scroll(-int(event.delta / 120), "units")
+        return "break"
 
     def _card(self, parent: tk.Widget, title: str) -> tk.Frame:
         card = tk.Frame(parent, bg="#120e1c", padx=18, pady=14, highlightthickness=1, highlightbackground="#241b36")
@@ -343,21 +393,53 @@ class PocketControllerApp:
         else:
             self.phone_var.set("Connect phone to same Wi-Fi and open Pocket Controller app (auto-discovery active).")
 
-        vjoy_str = str(data.get("vjoy", "Gamepad unavailable"))
-        self.vjoy_var.set(vjoy_str)
-        is_vjoy_ok = "active" in vjoy_str.lower() or "owned" in vjoy_str.lower() or "ready" in vjoy_str.lower() or "available" in vjoy_str.lower()
-        self.vjoy_badge_var.set("XINPUT/VJOY ONLINE" if is_vjoy_ok else "GAMEPAD OFFLINE")
-        self.vjoy_badge.configure(fg="#10b981" if is_vjoy_ok else "#f43f5e",
-                                  bg="#0f291e" if is_vjoy_ok else "#2d1219")
+        driver = str(data.get("driver", "auto"))
+        driver_labels = {"auto": "Auto", "xinput": "Xbox 360 (XInput)", "vjoy": "vJoy (Sim Wheel)"}
+        if self.driver_var.get() != driver_labels.get(driver, "Auto"):
+            self.driver_var.set(driver_labels.get(driver, "Auto"))
+        active_driver = str(data.get("active_driver") or "")
+        driver_error = str(data.get("driver_error") or "")
+        vjoy_str = str(data.get("vjoy", "No virtual controller driver ready"))
+        active_label = {"xinput": "Xbox 360 XInput", "vjoy": "vJoy Sim Wheel"}.get(active_driver, "")
+        self.vjoy_var.set((active_label + " active | " if active_label else "No output active | ") + (driver_error or vjoy_str))
+        driver_info = data.get("drivers") or {}
+        is_driver_ok = bool(active_driver) or any(
+            bool(info.get("available")) for info in driver_info.values() if isinstance(info, dict)
+        )
+        self.vjoy_badge_var.set(active_label.upper() if active_label else ("DRIVER READY" if is_driver_ok else "DRIVER OFFLINE"))
+        self.vjoy_badge.configure(fg="#10b981" if is_driver_ok else "#f43f5e",
+                                  bg="#0f291e" if is_driver_ok else "#2d1219")
 
         # Telemetry
         steer = max(-1.0, min(1.0, float(data.get("steer", 0) or 0)))
         throttle = max(0.0, min(1.0, float(data.get("throttle", 0) or 0)))
         brake = max(0.0, min(1.0, float(data.get("brake", 0) or 0)))
+        clutch = max(0.0, min(1.0, float(data.get("clutch", 0) or 0)))
+        handbrake = max(0.0, min(1.0, float(data.get("handbrake", 0) or 0)))
+        lx = max(-1.0, min(1.0, float(data.get("lx", 0) or 0)))
+        ly = max(-1.0, min(1.0, float(data.get("ly", 0) or 0)))
+        rx = max(-1.0, min(1.0, float(data.get("rx", 0) or 0)))
+        ry = max(-1.0, min(1.0, float(data.get("ry", 0) or 0)))
+        lt = max(0.0, min(1.0, float(data.get("lt", 0) or 0)))
+        rt = max(0.0, min(1.0, float(data.get("rt", 0) or 0)))
+        self.mode_var.set(str(data.get("controller_mode", "racepad")).upper())
+        self.sticks_var.set(
+            f"Sticks L {lx:+.2f}, {ly:+.2f} | R {rx:+.2f}, {ry:+.2f} | Triggers LT {lt:.0%} / RT {rt:.0%}"
+        )
+        dpad = data.get("dpad") or {}
+        if isinstance(dpad, str):
+            dpad_names = [name for name in ("up", "right", "down", "left") if name in dpad.lower()]
+        elif isinstance(dpad, dict):
+            dpad_names = [name for name in ("up", "right", "down", "left") if dpad.get(name)]
+        else:
+            dpad_names = []
+        self.dpad_var.set("D-pad  " + (" + ".join(dpad_names).upper() if dpad_names else "-") )
 
         self._draw_wheel(steer)
         self._update_meter(self.throttle_bar, throttle)
         self._update_meter(self.brake_bar, brake)
+        self._update_meter(self.clutch_bar, clutch)
+        self._update_meter(self.handbrake_bar, handbrake)
 
         buttons = data.get("buttons") or []
         for i, box in enumerate(self.button_widgets):
@@ -365,6 +447,27 @@ class PocketControllerApp:
             box.configure(bg="#8b5cf6" if pressed else "#181324",
                           fg="#ffffff" if pressed else "#94a3b8",
                           highlightbackground="#ffffff" if pressed else "#2e253e")
+
+    def _change_driver(self, _event=None) -> None:
+        driver = {
+            "Auto": "auto",
+            "Xbox 360 (XInput)": "xinput",
+            "vJoy (Sim Wheel)": "vjoy",
+        }.get(self.driver_var.get(), "auto")
+        request = urllib.request.Request(
+            "http://127.0.0.1:8765/mode",
+            data=json.dumps({"driver": driver}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=1.0) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error", "Could not change output driver."))
+            self.message_var.set(f"Output driver set to {self.driver_var.get()}.")
+        except (OSError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
+            self.message_var.set(f"Output driver change failed: {exc}")
 
     def close(self) -> None:
         self.closed = True

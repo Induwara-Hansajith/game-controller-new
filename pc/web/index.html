@@ -332,6 +332,21 @@
       border-radius: inherit;
       transition: width 0.08s linear;
     }
+    .meter-fill-clutch {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #f59e0b, #fbbf24);
+      border-radius: inherit; transition: width 0.08s linear;
+    }
+    .meter-fill-handbrake {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #0284c7, #38bdf8);
+      border-radius: inherit; transition: width 0.08s linear;
+    }
+    .stick-readout {
+      display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px;
+      color: #cbd5e1; font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    }
+    .stick-readout span { background: #14101e; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 7px 10px; }
 
     /* BUTTON CLUSTER */
     .btn-grid {
@@ -395,7 +410,7 @@
       </div>
       <div class="badge-bar">
         <div class="tag">
-          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.1</span>
+          <span style="color:#a78bfa;font-family:'JetBrains Mono';font-size:11px">v0.1.0-beta.2</span>
         </div>
         <div class="tag">
           <span id="dot" class="pulse-dot"></span>
@@ -437,13 +452,19 @@
       <!-- VIRTUAL JOYSTICK STATUS -->
       <section class="card">
         <div class="card-title">
-          <span>vJoy Virtual Driver</span>
-          <span id="vjoyBadge" style="color:var(--emerald);font-weight:700">ONLINE</span>
+          <span>Controller Output</span>
+          <span id="vjoyBadge" style="color:var(--emerald);font-weight:700">CHECKING</span>
         </div>
         <div style="background:rgba(10,8,16,0.7);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:16px">
-          <div id="vjoyStatus" style="font-size:15px;font-weight:600;color:#f8fafc">Checking vJoy…</div>
+          <label for="driverSelect" style="display:block;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;margin-bottom:8px">OUTPUT DRIVER</label>
+          <select id="driverSelect" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:#14101e;color:var(--ink);font:inherit">
+            <option value="auto">Auto</option>
+            <option value="xinput">Xbox 360 (XInput)</option>
+            <option value="vjoy">vJoy (Sim Wheel)</option>
+          </select>
+          <div id="vjoyStatus" style="font-size:14px;font-weight:600;color:#f8fafc;margin-top:10px">Checking controller drivers…</div>
           <p id="vjoyDetails" style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">
-            Steering → X axis &nbsp;·&nbsp; Throttle → Y axis &nbsp;·&nbsp; Brake → Z axis &nbsp;·&nbsp; Buttons 1–8
+            Auto selects XInput for Gamepad mode and vJoy for Racepad mode when available. vJoy maps clutch and handbrake to RX/RY and uses the POV hat for D-pad.
           </p>
         </div>
         <p style="margin-top:14px;font-size:12px;color:#64748b;line-height:1.4">
@@ -455,7 +476,7 @@
       <section class="card wide">
         <div class="card-title">
           <span>Live Cockpit Telemetry</span>
-          <span style="font-family:'JetBrains Mono';font-size:12px;color:var(--cyan)">60 FPS SYNC</span>
+            <span id="inputMode" style="font-family:'JetBrains Mono';font-size:12px;color:var(--cyan)">RACEPAD INPUT</span>
         </div>
 
         <div class="cockpit">
@@ -487,6 +508,23 @@
             </div>
 
             <div class="meter-group">
+              <div class="meter-header"><span style="color:#f59e0b">CLUTCH (RX / RIGHT STICK Y)</span><span id="clutchVal" class="meter-val-badge">0%</span></div>
+              <div class="meter-track"><div id="clutchFill" class="meter-fill-clutch"></div></div>
+            </div>
+
+            <div class="meter-group">
+              <div class="meter-header"><span style="color:#38bdf8">HANDBRAKE (RY / RIGHT STICK X)</span><span id="handbrakeVal" class="meter-val-badge">0%</span></div>
+              <div class="meter-track"><div id="handbrakeFill" class="meter-fill-handbrake"></div></div>
+            </div>
+
+            <div class="stick-readout">
+              <span id="leftStick">Left stick 0.00, 0.00</span>
+              <span id="rightStick">Right stick 0.00, 0.00</span>
+              <span id="triggerReadout">LT 0% / RT 0%</span>
+              <span id="dpadReadout">D-pad —</span>
+            </div>
+
+            <div class="meter-group">
               <div class="meter-header">
                 <span style="color:#f43f5e">BRAKE (Z AXIS)</span>
                 <span id="brakeVal" class="meter-val-badge">0%</span>
@@ -509,13 +547,13 @@
     </div>
 
     <footer>
-      <span>Pocket Controller v0.1.0-beta.1 · Local TCP Protocol</span>
+      <span>Pocket Controller v0.1.0-beta.2 · Local TCP Protocol</span>
       <span>Low Latency Touch & Tilt Emulation</span>
     </footer>
   </div>
 
   <script>
-    const BTN_LABELS = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT'];
+    const BTN_LABELS = ['A', 'B', 'X', 'Y', 'LB', 'RB', 'BACK', 'START', 'GUIDE', 'L3', 'R3', 'P-L', 'P-R', 'GEAR+', 'GEAR-', 'AUX'];
     const cluster = document.getElementById('buttonCluster');
     const btnElements = BTN_LABELS.map((label, idx) => {
       const el = document.createElement('div');
@@ -523,6 +561,22 @@
       el.innerHTML = `<span>${label}</span><span class="btn-sub">${idx+1}</span>`;
       cluster.appendChild(el);
       return el;
+    });
+
+    const driverSelect = document.getElementById('driverSelect');
+    driverSelect.addEventListener('change', async () => {
+      try {
+        const response = await fetch('/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ driver: driverSelect.value })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || 'Could not change output driver.');
+        document.getElementById('phoneStatusMsg').innerText = `Output driver set to ${driverSelect.options[driverSelect.selectedIndex].text}.`;
+      } catch (error) {
+        document.getElementById('phoneStatusMsg').innerText = `Driver selection failed: ${error.message}`;
+      }
     });
 
     function copyText(elemId) {
@@ -555,10 +609,16 @@
         document.getElementById('pinText').innerText = data.pin || '------';
         document.getElementById('phoneStatusMsg').innerText = isLive ? (data.message || 'Phone Connected') : 'Connect your phone to the same Wi-Fi and input the IP and PIN in the Android app.';
 
-        // Gamepad Status (Xbox 360 XInput + vJoy)
+        const selectedDriver = data.driver || 'auto';
+        if (document.activeElement !== driverSelect) driverSelect.value = selectedDriver;
+        const activeDriver = data.active_driver || '';
+
+        // Gamepad Status (Xbox 360 XInput or vJoy)
         const vjoyDesc = data.vjoy || 'Gamepad unavailable';
-        document.getElementById('vjoyStatus').innerText = vjoyDesc;
-        const isVjoyOk = vjoyDesc.toLowerCase().includes('active') || vjoyDesc.toLowerCase().includes('owned') || vjoyDesc.toLowerCase().includes('ready') || vjoyDesc.toLowerCase().includes('available');
+        const driverError = data.driver_error || '';
+        document.getElementById('vjoyStatus').innerText = driverError || (activeDriver ? `${activeDriver === 'xinput' ? 'Xbox 360 XInput' : 'vJoy Sim Wheel'} active · ${vjoyDesc}` : vjoyDesc);
+        document.getElementById('vjoyBadge').innerText = activeDriver ? activeDriver.toUpperCase() : (Object.values(data.drivers || {}).some(d => d.available) ? 'READY' : 'OFFLINE');
+        const isVjoyOk = Boolean(activeDriver) || Object.values(data.drivers || {}).some(d => d.available);
         document.getElementById('vjoyBadge').innerText = isVjoyOk ? 'ONLINE' : 'OFFLINE';
         document.getElementById('vjoyBadge').style.color = isVjoyOk ? 'var(--emerald)' : 'var(--rose)';
 
@@ -580,6 +640,27 @@
         const brakePct = Math.round(brake * 100);
         document.getElementById('brakeFill').style.width = `${brakePct}%`;
         document.getElementById('brakeVal').innerText = `${brakePct}%`;
+
+        const clutch = Math.max(0, Math.min(1, parseFloat(data.clutch) || 0));
+        document.getElementById('clutchFill').style.width = `${Math.round(clutch * 100)}%`;
+        document.getElementById('clutchVal').innerText = `${Math.round(clutch * 100)}%`;
+        const handbrake = Math.max(0, Math.min(1, parseFloat(data.handbrake) || 0));
+        document.getElementById('handbrakeFill').style.width = `${Math.round(handbrake * 100)}%`;
+        document.getElementById('handbrakeVal').innerText = `${Math.round(handbrake * 100)}%`;
+
+        const lx = Math.max(-1, Math.min(1, parseFloat(data.lx) || 0));
+        const ly = Math.max(-1, Math.min(1, parseFloat(data.ly) || 0));
+        const rx = Math.max(-1, Math.min(1, parseFloat(data.rx) || 0));
+        const ry = Math.max(-1, Math.min(1, parseFloat(data.ry) || 0));
+        const lt = Math.max(0, Math.min(1, parseFloat(data.lt) || 0));
+        const rt = Math.max(0, Math.min(1, parseFloat(data.rt) || 0));
+        document.getElementById('inputMode').innerText = `${String(data.controller_mode || 'racepad').toUpperCase()} INPUT`;
+        document.getElementById('leftStick').innerText = `Left stick ${lx.toFixed(2)}, ${ly.toFixed(2)}`;
+        document.getElementById('rightStick').innerText = `Right stick ${rx.toFixed(2)}, ${ry.toFixed(2)}`;
+        document.getElementById('triggerReadout').innerText = `LT ${Math.round(lt * 100)}% / RT ${Math.round(rt * 100)}%`;
+        const dpad = data.dpad || {};
+        const dpadNames = typeof dpad === 'string' ? ['up', 'right', 'down', 'left'].filter(name => dpad.toLowerCase().includes(name)) : ['up', 'right', 'down', 'left'].filter(name => dpad[name]);
+        document.getElementById('dpadReadout').innerText = `D-pad ${dpadNames.length ? dpadNames.join(' + ').toUpperCase() : '—'}`;
 
         // Buttons
         const btns = data.buttons || [];
