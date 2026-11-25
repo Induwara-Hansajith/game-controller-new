@@ -12,3 +12,4 @@ __pycache__/
 *.apk
 *.aab
 .venv/
+/build/
