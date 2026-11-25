@@ -85,11 +85,24 @@ def local_ipv4_addresses() -> list[str]:
     except OSError:
         pass
 
-    if primary and primary in found:
-        found.remove(primary)
-        found.insert(0, primary)
-    elif primary and not primary.startswith("127.") and not primary.startswith("169.254."):
-        found.insert(0, primary)
+    def ip_priority(ip: str) -> int:
+        if ip.startswith("192.168."):
+            return 0
+        if ip.startswith("10."):
+            return 1
+        if ip.startswith("172."):
+            return 2
+        return 3
+
+    found.sort(key=ip_priority)
+
+    if primary and not primary.startswith("127.") and not primary.startswith("169.254."):
+        if found and ip_priority(primary) <= ip_priority(found[0]):
+            if primary in found:
+                found.remove(primary)
+            found.insert(0, primary)
+        elif primary not in found:
+            found.append(primary)
 
     return found
 
@@ -217,8 +230,10 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             except asyncio.TimeoutError:
                 with state_lock:
                     stale = time.monotonic() - float(state["last_packet"]) > 0.35
-                if stale and acquired:
-                    device.neutral()
+                if stale:
+                    if acquired:
+                        device.neutral()
+                    update_state(steer=0.0, throttle=0.0, brake=0.0, buttons=[])
                 continue
 
             if not raw or len(raw) > MAX_LINE_BYTES:

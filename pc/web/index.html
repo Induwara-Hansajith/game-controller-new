@@ -509,7 +509,7 @@
     </div>
 
     <footer>
-      <span>Pocket Controller v2.0 · Local TCP Protocol</span>
+      <span>Pocket Controller v0.1.0-beta.1 · Local TCP Protocol</span>
       <span>Low Latency Touch & Tilt Emulation</span>
     </footer>
   </div>
@@ -526,7 +526,10 @@
     });
 
     function copyText(elemId) {
-      const text = document.getElementById(elemId).innerText.trim();
+      let text = document.getElementById(elemId).innerText.trim();
+      if (text.includes('·')) {
+        text = text.split('·')[0].trim();
+      }
       navigator.clipboard.writeText(text);
       const btn = event.target;
       const original = btn.innerText;
@@ -548,9 +551,9 @@
 
         // Address & PIN
         const addresses = data.addresses || [];
-        document.getElementById('addressText').innerText = addresses[0] || '127.0.0.1';
+        document.getElementById('addressText').innerText = addresses.length > 0 ? addresses.join(' · ') : '127.0.0.1';
         document.getElementById('pinText').innerText = data.pin || '------';
-        document.getElementById('phoneStatusMsg').innerText = isLive ? `Connected from ${data.message}` : 'Connect your phone to the same Wi-Fi and input the IP and PIN in the Android app.';
+        document.getElementById('phoneStatusMsg').innerText = isLive ? (data.message || 'Phone Connected') : 'Connect your phone to the same Wi-Fi and input the IP and PIN in the Android app.';
 
         // vJoy
         const vjoyDesc = data.vjoy || 'vJoy unavailable';

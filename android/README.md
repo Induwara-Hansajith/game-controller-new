@@ -8,7 +8,7 @@ Open this folder in Android Studio or run `gradlew.bat -p . assembleDebug` from 
 
 ## Use
 
-1. Start the PC companion and enter its address and PIN in the top row.
+1. Start the PC companion and open the Android app on the same trusted private Wi-Fi. It tries to discover the PC automatically; if needed, enter the displayed address and PIN in the top row.
 2. Hold the phone in your preferred neutral position and tap **Center**.
 3. Leave **Gyro steer** enabled for tilt steering. Turn it off to steer by dragging the wheel.
 4. Touch and hold the gas or brake areas and the A/B/X/Y buttons to press them.
