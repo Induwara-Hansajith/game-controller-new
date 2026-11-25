@@ -12,6 +12,7 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Bundle;
+import android.net.wifi.WifiManager;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -31,6 +32,7 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
+import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -51,8 +53,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private Sensor rotationSensor;
 
     private volatile boolean discovering;
+    private volatile long discoveryGeneration;
     private Thread discoveryThread;
     private volatile DatagramSocket discoverySocket;
+    private WifiManager.MulticastLock discoveryMulticastLock;
 
     private volatile Socket socket;
     private volatile BufferedWriter writer;
@@ -555,67 +559,138 @@ public final class MainActivity extends Activity implements SensorEventListener,
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private synchronized void acquireDiscoveryLock(long generation) {
+        if (generation != discoveryGeneration || !discovering) return;
+        try {
+            WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi == null) return;
+            WifiManager.MulticastLock lock = wifi.createMulticastLock("PocketControllerDiscovery");
+            lock.setReferenceCounted(false);
+            lock.acquire();
+            discoveryMulticastLock = lock;
+        } catch (RuntimeException ignored) {
+            // UDP discovery still works on devices that do not grant the Wi-Fi lock.
+        }
+    }
+
+    private synchronized void releaseDiscoveryLock(long generation) {
+        if (generation != discoveryGeneration) return;
+        WifiManager.MulticastLock lock = discoveryMulticastLock;
+        discoveryMulticastLock = null;
+        if (lock != null && lock.isHeld()) {
+            try { lock.release(); } catch (RuntimeException ignored) {}
+        }
+    }
+
+    private boolean isDiscoveryCurrent(long generation) {
+        return discovering && generation == discoveryGeneration;
+    }
+
     private void startDiscovery() {
         if (discovering) return;
+        long generation = ++discoveryGeneration;
         discovering = true;
-        discoveryThread = new Thread(() -> {
+        acquireDiscoveryLock(generation);
+        Thread worker = new Thread(() -> {
             DatagramSocket ds = null;
+            boolean failed = false;
             try {
                 ds = new DatagramSocket(null);
+                discoverySocket = ds;
+                if (!isDiscoveryCurrent(generation)) return;
                 ds.setReuseAddress(true);
                 ds.bind(new InetSocketAddress(DISCOVERY_PORT));
-                discoverySocket = ds;
-                ds.setSoTimeout(3000);
+                ds.setSoTimeout(1200);
                 byte[] buffer = new byte[2048];
-                while (discovering) {
+                while (isDiscoveryCurrent(generation)) {
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     try {
-                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                         ds.receive(packet);
+                    } catch (SocketTimeoutException ignored) {
+                        continue;
+                    } catch (IOException exc) {
+                        failed = isDiscoveryCurrent(generation) && !ds.isClosed();
+                        break;
+                    }
+
+                    try {
                         String jsonStr = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
                         JSONObject beacon = new JSONObject(jsonStr);
-                        if ("pocket-controller".equals(beacon.optString("service"))) {
-                            String foundHost = packet.getAddress().getHostAddress();
-                            String pin = beacon.optString("pin", "");
-                            String hostname = beacon.optString("hostname", "PC");
-                            runOnUiThread(() -> onDiscoveredPc(foundHost, pin, hostname));
-                        }
-                    } catch (SocketTimeoutException ignored) {
+                        if (!"pocket-controller".equals(beacon.optString("service"))) continue;
+                        String foundHost = packet.getAddress().getHostAddress();
+                        String pin = beacon.optString("pin", "");
+                        String hostname = beacon.optString("hostname", "PC");
+                        if (!pin.matches("\\d{6}")) continue;
+                        runOnUiThread(() -> {
+                            if (isDiscoveryCurrent(generation)) onDiscoveredPc(foundHost, pin, hostname);
+                        });
                     } catch (Exception ignored) {
+                        // Ignore malformed or unrelated datagrams and keep listening.
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (IOException exc) {
+                failed = isDiscoveryCurrent(generation) && (ds == null || !ds.isClosed());
+            } catch (RuntimeException exc) {
+                failed = isDiscoveryCurrent(generation);
             } finally {
                 if (discoverySocket == ds) discoverySocket = null;
                 if (ds != null) {
                     try { ds.close(); } catch (Exception ignored) {}
                 }
+                if (generation == discoveryGeneration) {
+                    discovering = false;
+                    if (discoveryThread == Thread.currentThread()) discoveryThread = null;
+                    releaseDiscoveryLock(generation);
+                    if (failed) {
+                        runOnUiThread(() -> {
+                            if (generation == discoveryGeneration && discoveredHost.isEmpty()
+                                    && discoveredCardText != null) {
+                                discoveredCardText.setText("Automatic discovery unavailable. Enter the PC address and PIN manually.");
+                            }
+                        });
+                    }
+                }
             }
         }, "pc-discovery");
-        discoveryThread.start();
+        discoveryThread = worker;
+        worker.start();
     }
 
     private void stopDiscovery() {
+        long generation = ++discoveryGeneration;
         discovering = false;
-        DatagramSocket s = discoverySocket;
-        if (s != null) {
-            try { s.close(); } catch (Exception ignored) {}
+        DatagramSocket ds = discoverySocket;
+        discoverySocket = null;
+        if (ds != null) {
+            try { ds.close(); } catch (Exception ignored) {}
         }
-        if (discoveryThread != null) {
-            discoveryThread.interrupt();
-            discoveryThread = null;
-        }
+        Thread worker = discoveryThread;
+        discoveryThread = null;
+        if (worker != null) worker.interrupt();
+        releaseDiscoveryLock(generation);
     }
 
     private void onDiscoveredPc(String host, String pin, String hostname) {
-        this.discoveredHost = host;
-        this.discoveredPin = pin;
-        this.discoveredName = hostname;
+        if (host == null || host.isEmpty()) return;
+        String previousHost = discoveredHost;
+        String savedHost = getSharedPreferences("controller", MODE_PRIVATE).getString("last_host", "");
+        String currentHost = addressField == null ? "" : addressField.getText().toString().trim();
+        boolean useDetectedHost = currentHost.isEmpty()
+                || currentHost.equalsIgnoreCase(savedHost)
+                || currentHost.equalsIgnoreCase(previousHost)
+                || currentHost.equalsIgnoreCase(host);
 
-        if (addressField != null && addressField.getText().toString().trim().isEmpty()) {
-            addressField.setText(host);
-        }
-        if (pinField != null && pinField.getText().toString().trim().isEmpty()) {
-            pinField.setText(pin);
+        discoveredHost = host;
+        discoveredName = hostname;
+        if (pin != null && pin.matches("\\d{6}")) discoveredPin = pin;
+
+        if (addressField != null && useDetectedHost) addressField.setText(host);
+        if (pinField != null && useDetectedHost && !discoveredPin.isEmpty()) pinField.setText(discoveredPin);
+        if (useDetectedHost && !discoveredPin.isEmpty()) {
+            getSharedPreferences("controller", MODE_PRIVATE).edit()
+                    .putString("last_host", host)
+                    .putString("last_pin", discoveredPin)
+                    .apply();
         }
         updateDiscoveryCard();
     }

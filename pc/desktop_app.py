@@ -243,7 +243,7 @@ class PocketControllerApp:
 
         # Rotate wheel angle
         deg = steer * 45.0
-        rad = math.toRadians(deg)
+        rad = math.radians(deg)
 
         # Rim
         c.create_oval(cx - r, cy - r, cx + r, cy + r, outline="#1f182c", width=12)
@@ -251,7 +251,7 @@ class PocketControllerApp:
                       outline="#a855f7" if abs(steer) > 0.05 else "#3b2c52", width=1.5)
 
         # Top Amber Stripe
-        top_rad = math.toRadians(deg - 90)
+        top_rad = math.radians(deg - 90)
         sx = cx + (r + 1) * math.cos(top_rad)
         sy = cy + (r + 1) * math.sin(top_rad)
         c.create_oval(sx - 5, sy - 5, sx + 5, sy + 5, fill="#f59e0b", outline="#fbbf24")
@@ -263,7 +263,7 @@ class PocketControllerApp:
                       cx + spoke_len * math.cos(rad), cy + spoke_len * math.sin(rad),
                       fill="#2a203c", width=6)
         # Vertical bottom spoke
-        v_rad = math.toRadians(deg + 90)
+        v_rad = math.radians(deg + 90)
         c.create_line(cx, cy, cx + spoke_len * math.cos(v_rad), cy + spoke_len * math.sin(v_rad),
                       fill="#2a203c", width=6)
 
