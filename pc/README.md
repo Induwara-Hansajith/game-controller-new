@@ -12,4 +12,4 @@ Run `build.bat` on Windows. It creates `dist/PocketControllerPC.exe`. The build 
 
 The gaming PC still needs vJoy installed and configured: device 1 should have X, Y, and Z axes and up to eight buttons. The app never installs or reconfigures the driver. vJoy maps steering to X, throttle to Y, and brake to Z. Disconnecting a phone returns all controls to neutral and releases vJoy.
 
-The PC companion allows one connected phone at a time. It does not currently create an Xbox/XInput device or discover phones automatically.
+The receiver broadcasts its presence on the local network so Android can auto-detect the PC. The PC companion allows one connected phone at a time and does not currently create an Xbox/XInput device.

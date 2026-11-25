@@ -16,6 +16,7 @@ from tkinter import ttk
 
 
 APP_DIR = Path(__file__).resolve().parent
+VERSION = "0.1.0-beta.1"
 
 
 def run_receiver() -> None:
@@ -27,7 +28,7 @@ def run_receiver() -> None:
 class PocketControllerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Pocket Controller · PC")
+        self.root.title(f"Pocket Controller · PC v{VERSION}")
         self.root.geometry("760x600")
         self.root.minsize(680, 540)
         self.root.configure(bg="#0b0910")
@@ -60,14 +61,16 @@ class PocketControllerApp:
         style.configure("Accent.TButton", background="#7545d8", foreground="white", padding=(14, 9), borderwidth=0)
         style.map("Accent.TButton", background=[("active", "#8b5cf6")])
         style.configure("TButton", padding=(10, 8))
-        style.configure("Horizontal.TProgressbar", troughcolor="#28232f", background="#9b72f4", bordercolor="#28232f", lightcolor="#9b72f4", darkcolor="#7c3aed")
+        style.configure("Steer.Horizontal.TProgressbar", troughcolor="#161220", background="#06b6d4", bordercolor="#28232f", lightcolor="#06b6d4", darkcolor="#0891b2")
+        style.configure("Throttle.Horizontal.TProgressbar", troughcolor="#161220", background="#10b981", bordercolor="#28232f", lightcolor="#10b981", darkcolor="#059669")
+        style.configure("Brake.Horizontal.TProgressbar", troughcolor="#161220", background="#f43f5e", bordercolor="#28232f", lightcolor="#f43f5e", darkcolor="#e11d48")
 
     def _build(self) -> None:
         outer = ttk.Frame(self.root, padding=(26, 22))
         outer.pack(fill="both", expand=True)
         header = ttk.Frame(outer)
         header.pack(fill="x", pady=(0, 18))
-        ttk.Label(header, text="POCKET CONTROLLER", style="Eyebrow.TLabel").pack(anchor="w")
+        ttk.Label(header, text=f"POCKET CONTROLLER · v{VERSION}", style="Eyebrow.TLabel").pack(anchor="w")
         ttk.Label(header, text="PC companion", style="Title.TLabel").pack(anchor="w", pady=(3, 0))
 
         connection = self._card(outer, "CONNECTION")
@@ -89,21 +92,27 @@ class PocketControllerApp:
         ttk.Label(device, text="Steering → X   ·   Throttle → Y   ·   Brake → Z   ·   Buttons 1–8", style="Muted.TLabel").pack(anchor="w", pady=(12, 0))
 
         live = self._card(outer, "LIVE INPUT")
+        bar_styles = {
+            "steer": "Steer.Horizontal.TProgressbar",
+            "throttle": "Throttle.Horizontal.TProgressbar",
+            "brake": "Brake.Horizontal.TProgressbar",
+        }
         for key, label in (("steer", "Steering"), ("throttle", "Throttle"), ("brake", "Brake")):
             row = ttk.Frame(live, style="Card.TFrame")
             row.pack(fill="x", pady=6)
             ttk.Label(row, text=label, width=11).pack(side="left")
-            bar = ttk.Progressbar(row, maximum=100, variable=self.values[key])
+            bar = ttk.Progressbar(row, maximum=100, variable=self.values[key], style=bar_styles[key])
             bar.pack(side="left", fill="x", expand=True, padx=12)
             value = tk.Label(row, text="0%", fg="#f3eff8", bg="#17131f", width=6, anchor="e", font=("Segoe UI", 9))
             value.pack(side="right")
             setattr(self, key + "_label", value)
         buttons = ttk.Frame(live, style="Card.TFrame")
         buttons.pack(fill="x", pady=(8, 0))
-        for index in range(8):
-            label = tk.Label(buttons, text=str(index + 1), bg="#0f0d13", fg="#8e8797", padx=12, pady=6,
+        btn_names = ["A (1)", "B (2)", "X (3)", "Y (4)", "LB (5)", "RB (6)", "LT (7)", "RT (8)"]
+        for index, name in enumerate(btn_names):
+            label = tk.Label(buttons, text=name, bg="#0f0d13", fg="#8e8797", padx=10, pady=6,
                              font=("Segoe UI Semibold", 9), highlightthickness=1, highlightbackground="#40384a")
-            label.pack(side="left", padx=(0, 8))
+            label.pack(side="left", padx=(0, 6))
             self.button_labels.append(label)
 
         actions = ttk.Frame(outer)
@@ -149,8 +158,16 @@ class PocketControllerApp:
         process = self.receiver
         self.receiver = None
         if process and process.poll() is None:
-            process.terminate()
-            threading.Thread(target=process.wait, kwargs={"timeout": 5}, daemon=True).start()
+            # Request clean shutdown first so vJoy driver is cleanly relinquished
+            try:
+                urllib.request.urlopen("http://127.0.0.1:8765/shutdown", timeout=0.5)
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=1.2)
+            except (subprocess.TimeoutExpired, OSError):
+                process.terminate()
+                threading.Thread(target=process.wait, kwargs={"timeout": 5}, daemon=True).start()
 
     def refresh(self) -> None:
         if self.closed:
@@ -176,8 +193,10 @@ class PocketControllerApp:
         self.vjoy_var.set(str(data.get("vjoy", "vJoy status unavailable")))
         self.message_var.set(str(data.get("message", "")))
         steer = max(-1.0, min(1.0, float(data.get("steer", 0) or 0)))
-        self.values["steer"].set(abs(steer) * 100)
-        self.steer_label.configure(text=f"{round(steer * 100)}%")
+        # Map -1.0..1.0 to 0..100 with 50 as neutral center
+        self.values["steer"].set((steer + 1.0) * 50.0)
+        steer_pct = round(steer * 100)
+        self.steer_label.configure(text=f"{steer_pct:+d}%" if abs(steer) >= 0.01 else "0%")
         for key in ("throttle", "brake"):
             value = max(0.0, min(1.0, float(data.get(key, 0) or 0)))
             self.values[key].set(value * 100)

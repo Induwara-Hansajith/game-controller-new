@@ -25,8 +25,11 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -36,6 +39,7 @@ public final class MainActivity extends Activity implements SensorEventListener 
     private static final int PURPLE = Color.rgb(154, 115, 255);
     private static final int MUTED = Color.rgb(185, 176, 200);
     private static final int PORT = 8766;
+    private static final int DISCOVERY_PORT = 8767;
 
     private EditText addressField;
     private EditText pinField;
@@ -45,6 +49,10 @@ public final class MainActivity extends Activity implements SensorEventListener 
     private ControllerPad controllerPad;
     private SensorManager sensorManager;
     private Sensor rotationSensor;
+
+    private volatile boolean discovering;
+    private Thread discoveryThread;
+    private volatile DatagramSocket discoverySocket;
 
     private volatile Socket socket;
     private volatile BufferedWriter writer;
@@ -285,23 +293,92 @@ public final class MainActivity extends Activity implements SensorEventListener 
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private void startDiscovery() {
+        if (discovering) return;
+        discovering = true;
+        discoveryThread = new Thread(() -> {
+            DatagramSocket ds = null;
+            try {
+                ds = new DatagramSocket(null);
+                ds.setReuseAddress(true);
+                ds.bind(new InetSocketAddress(DISCOVERY_PORT));
+                discoverySocket = ds;
+                ds.setSoTimeout(3000);
+                byte[] buffer = new byte[2048];
+                while (discovering) {
+                    try {
+                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                        ds.receive(packet);
+                        String jsonStr = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+                        JSONObject beacon = new JSONObject(jsonStr);
+                        if ("pocket-controller".equals(beacon.optString("service"))) {
+                            String foundHost = packet.getAddress().getHostAddress();
+                            String pin = beacon.optString("pin", "");
+                            String hostname = beacon.optString("hostname", "PC");
+                            runOnUiThread(() -> onDiscoveredPc(foundHost, pin, hostname));
+                        }
+                    } catch (SocketTimeoutException ignored) {
+                    } catch (Exception ignored) {
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (discoverySocket == ds) discoverySocket = null;
+                if (ds != null) {
+                    try { ds.close(); } catch (Exception ignored) {}
+                }
+            }
+        }, "pc-discovery");
+        discoveryThread.start();
+    }
+
+    private void stopDiscovery() {
+        discovering = false;
+        DatagramSocket socket = discoverySocket;
+        if (socket != null) {
+            try { socket.close(); } catch (Exception ignored) {}
+        }
+        if (discoveryThread != null) {
+            discoveryThread.interrupt();
+            discoveryThread = null;
+        }
+    }
+
+    private void onDiscoveredPc(String host, String pin, String hostname) {
+        if (connected || connecting) return;
+        String curHost = addressField.getText().toString().trim();
+        if (curHost.isEmpty()) {
+            addressField.setText(host);
+            if (!pin.isEmpty() && pinField.getText().toString().trim().isEmpty()) {
+                pinField.setText(pin);
+            }
+            statusText.setText("Auto-detected " + hostname + " (" + host + ") · Tap Connect");
+            statusText.setTextColor(Color.rgb(110, 231, 183));
+        } else if (!curHost.equals(host)) {
+            statusText.setText("Detected: " + hostname + " (" + host + ")");
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         if (sensorManager != null && rotationSensor != null) {
             sensorManager.registerListener(this, rotationSensor, SensorManager.SENSOR_DELAY_GAME);
         }
+        startDiscovery();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        stopDiscovery();
         if (sensorManager != null) sensorManager.unregisterListener(this);
         disconnect();
     }
 
     @Override
     protected void onDestroy() {
+        stopDiscovery();
         disconnect();
         super.onDestroy();
     }

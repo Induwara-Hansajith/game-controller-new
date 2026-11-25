@@ -11,7 +11,13 @@ DEVICE_ID = 1
 HID_USAGE_X = 0x30
 HID_USAGE_Y = 0x31
 HID_USAGE_Z = 0x32
-STATUS_NAMES = {0: "owned", 1: "available", 2: "busy", 3: "missing", 4: "unknown"}
+STATUS_NAMES = {
+    0: "owned",
+    1: "available",
+    2: "busy (in use by another app)",
+    3: "missing (unconfigured)",
+    4: "unknown",
+}
 
 
 class VJoyUnavailable(RuntimeError):
@@ -27,15 +33,17 @@ class VJoyDevice:
 
     def __init__(self, device_id: int = DEVICE_ID) -> None:
         self.device_id = device_id
-        self._dll = None
+        self._dll: ctypes.CDLL | None = None
         self._acquired = False
         self._axis_ranges: dict[int, tuple[int, int]] = {}
         self._button_count = 0
+        self._error: str | None = None
         self._load()
 
     def _load(self) -> None:
         if os.name != "nt":
-            raise VJoyUnavailable("The vJoy receiver runs on Windows.")
+            self._error = "The vJoy receiver runs on Windows."
+            return
 
         configured = os.environ.get("VJOY_DLL_PATH")
         candidates = [Path(configured)] if configured else []
@@ -45,13 +53,15 @@ class VJoyDevice:
         ]
         dll_path = next((p for p in candidates if p and p.is_file()), None)
         if dll_path is None:
-            raise VJoyUnavailable("vJoyInterface.dll was not found. Install/configure vJoy, then restart the receiver.")
+            self._error = "vJoyInterface.dll was not found. Install vJoy to enable virtual joystick output."
+            return
 
         try:
             dll = ctypes.CDLL(str(dll_path))
             uint = ctypes.c_uint
             long = ctypes.c_long
             bool32 = ctypes.c_int
+
             dll.vJoyEnabled.argtypes = []
             dll.vJoyEnabled.restype = bool32
             dll.GetVJDStatus.argtypes = [uint]
@@ -75,39 +85,69 @@ class VJoyDevice:
             dll.SetBtn.argtypes = [bool32, uint, ctypes.c_ubyte]
             dll.SetBtn.restype = bool32
         except (OSError, AttributeError) as exc:
-            raise VJoyUnavailable(f"Could not load the vJoy API: {exc}") from exc
+            self._error = f"Could not load the vJoy API: {exc}"
+            return
 
         self._dll = dll
         if not dll.vJoyEnabled():
-            raise VJoyUnavailable("The vJoy driver is installed but not enabled.")
-
-        status = int(dll.GetVJDStatus(self.device_id))
-        if status in (3, 4):
-            raise VJoyUnavailable(f"vJoy device {self.device_id} is {STATUS_NAMES.get(status, 'unavailable')}.")
+            self._error = "The vJoy driver is installed but disabled in Windows."
+            return
 
         for usage in (HID_USAGE_X, HID_USAGE_Y, HID_USAGE_Z):
             if not dll.GetVJDAxisExist(self.device_id, usage):
                 continue
             low, high = ctypes.c_long(), ctypes.c_long()
-            if dll.GetVJDAxisMin(self.device_id, usage, ctypes.byref(low)) and dll.GetVJDAxisMax(self.device_id, usage, ctypes.byref(high)):
+            if dll.GetVJDAxisMin(self.device_id, usage, ctypes.byref(low)) and dll.GetVJDAxisMax(
+                self.device_id, usage, ctypes.byref(high)
+            ):
                 self._axis_ranges[usage] = (low.value, high.value)
+
         self._button_count = max(0, int(dll.GetVJDButtonNumber(self.device_id)))
+        self._error = None
+
+    @property
+    def is_available(self) -> bool:
+        if self._dll is None:
+            self._load()
+        if self._dll is None:
+            return False
+        status = int(self._dll.GetVJDStatus(self.device_id))
+        return status in (0, 1)
 
     @property
     def description(self) -> str:
         if self._dll is None:
-            return "vJoy unavailable"
+            self._load()
+        if self._dll is None:
+            return f"vJoy unavailable ({self._error or 'driver not loaded'})"
+
         status = int(self._dll.GetVJDStatus(self.device_id))
-        return f"vJoy device {self.device_id}: {STATUS_NAMES.get(status, 'unknown')} · {len(self._axis_ranges)} axes · {self._button_count} buttons"
+        status_text = STATUS_NAMES.get(status, "unknown")
+        axis_count = len(self._axis_ranges)
+        return f"vJoy device {self.device_id}: {status_text} · {axis_count} axes · {self._button_count} buttons"
 
     def acquire(self) -> None:
+        if self._acquired:
+            self.neutral()
+            return
+
         if self._dll is None:
-            raise VJoyUnavailable("vJoy is unavailable.")
+            self._load()
+        if self._dll is None:
+            raise VJoyUnavailable(self._error or "vJoy driver is unavailable.")
+
         status = int(self._dll.GetVJDStatus(self.device_id))
+        if status == 0:  # VJD_STAT_OWN (already owned by this process)
+            self._acquired = True
+            self.neutral()
+            return
         if status != 1:  # VJD_STAT_FREE
-            raise VJoyUnavailable(f"vJoy device {self.device_id} is {STATUS_NAMES.get(status, 'not available')}.")
+            status_text = STATUS_NAMES.get(status, "not available")
+            raise VJoyUnavailable(f"vJoy device {self.device_id} is {status_text}.")
+
         if not self._dll.AcquireVJD(self.device_id):
             raise VJoyUnavailable(f"Could not acquire vJoy device {self.device_id}.")
+
         self._acquired = True
         self.neutral()
 
@@ -123,14 +163,14 @@ class VJoyDevice:
 
     def _axis(self, usage: int, normalized: float) -> None:
         bounds = self._axis_ranges.get(usage)
-        if not self._acquired or bounds is None:
+        if not self._acquired or bounds is None or self._dll is None:
             return
         low, high = bounds
         value = round(low + ((self._clamp(normalized, -1.0, 1.0) + 1.0) * 0.5 * (high - low)))
         self._dll.SetAxis(value, self.device_id, usage)
 
     def apply(self, data: dict) -> None:
-        if not self._acquired:
+        if not self._acquired or self._dll is None:
             return
         self._axis(HID_USAGE_X, self._clamp(data.get("steer"), -1.0, 1.0))
         self._axis(HID_USAGE_Y, self._clamp(data.get("throttle"), 0.0, 1.0) * 2.0 - 1.0)
@@ -149,6 +189,10 @@ class VJoyDevice:
 
     def close(self) -> None:
         if self._acquired and self._dll is not None:
-            self._dll.ResetVJD(self.device_id)
-            self._dll.RelinquishVJD(self.device_id)
+            try:
+                self.neutral()
+                self._dll.ResetVJD(self.device_id)
+                self._dll.RelinquishVJD(self.device_id)
+            except Exception:
+                pass
         self._acquired = False
