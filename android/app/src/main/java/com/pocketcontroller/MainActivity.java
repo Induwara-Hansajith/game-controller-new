@@ -72,7 +72,20 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private volatile boolean touchingWheel;
     private volatile float throttle;
     private volatile float brake;
-    private volatile boolean[] buttons = new boolean[8];
+    private volatile float clutch;
+    private volatile float handbrake;
+    private volatile float lx;
+    private volatile float ly;
+    private volatile float rx;
+    private volatile float ry;
+    private volatile float lt;
+    private volatile float rt;
+    private volatile boolean dpadUp;
+    private volatile boolean dpadDown;
+    private volatile boolean dpadLeft;
+    private volatile boolean dpadRight;
+    private volatile boolean[] buttons = new boolean[16];
+    private volatile String currentModeName = "racepad";
 
     private boolean gyroEnabled = true;
     private String discoveredHost = "";
@@ -142,13 +155,34 @@ public final class MainActivity extends Activity implements SensorEventListener,
     }
 
     @Override
-    public void onInputChanged(float steer, boolean isTouchingWheel, float newThrottle, float newBrake, boolean[] newButtons) {
+    public void onInputChanged(
+            String mode,
+            float steer, boolean isTouchingWheel,
+            float newThrottle, float newBrake, float newClutch, float newHandbrake,
+            float newLx, float newLy, float newRx, float newRy,
+            float newLt, float newRt,
+            boolean newDpadUp, boolean newDpadDown, boolean newDpadLeft, boolean newDpadRight,
+            boolean[] newButtons
+    ) {
+        this.currentModeName = mode;
         this.touchSteer = steer;
         this.touchingWheel = isTouchingWheel;
         this.throttle = newThrottle;
         this.brake = newBrake;
+        this.clutch = newClutch;
+        this.handbrake = newHandbrake;
+        this.lx = newLx;
+        this.ly = newLy;
+        this.rx = newRx;
+        this.ry = newRy;
+        this.lt = newLt;
+        this.rt = newRt;
+        this.dpadUp = newDpadUp;
+        this.dpadDown = newDpadDown;
+        this.dpadLeft = newDpadLeft;
+        this.dpadRight = newDpadRight;
         if (newButtons != null) {
-            System.arraycopy(newButtons, 0, this.buttons, 0, Math.min(newButtons.length, 8));
+            System.arraycopy(newButtons, 0, this.buttons, 0, Math.min(newButtons.length, 16));
         }
     }
 
@@ -508,15 +542,32 @@ public final class MainActivity extends Activity implements SensorEventListener,
     }
 
     private JSONObject inputPacket() throws Exception {
-        float steer = touchingWheel || !gyroEnabled ? touchSteer : gyroSteer;
         JSONObject packet = new JSONObject();
         packet.put("type", "input");
+        packet.put("mode", currentModeName);
+        float steer = touchingWheel || !gyroEnabled ? touchSteer : gyroSteer;
         packet.put("steer", finite(steer));
         packet.put("throttle", finite(throttle));
         packet.put("brake", finite(brake));
+        packet.put("clutch", finite(clutch));
+        packet.put("handbrake", finite(handbrake));
+        packet.put("lx", finite(lx));
+        packet.put("ly", finite(ly));
+        packet.put("rx", finite(rx));
+        packet.put("ry", finite(ry));
+        packet.put("lt", finite(lt));
+        packet.put("rt", finite(rt));
+
+        JSONObject dpad = new JSONObject();
+        dpad.put("up", dpadUp);
+        dpad.put("down", dpadDown);
+        dpad.put("left", dpadLeft);
+        dpad.put("right", dpadRight);
+        packet.put("dpad", dpad);
+
         JSONArray pressed = new JSONArray();
         boolean[] current = buttons;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 16; i++) {
             pressed.put(i < current.length && current[i]);
         }
         packet.put("buttons", pressed);
@@ -737,12 +788,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         while (delta < -Math.PI) delta += (float) (2 * Math.PI);
         gyroSteer = finite(delta / (float) Math.toRadians(45));
         if (controllerPad != null) {
-            controllerPad.setDisplayedInput(
-                    gyroEnabled && !touchingWheel ? gyroSteer : touchSteer,
-                    throttle,
-                    brake,
-                    buttons
-            );
+            controllerPad.setDisplayedGyroSteer(gyroSteer);
         }
     }
 
