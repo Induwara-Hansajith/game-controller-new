@@ -307,7 +307,7 @@ class PocketControllerApp:
             except Exception:
                 pass
             try:
-                process.wait(timeout=1.2)
+                process.wait(timeout=3.0)
             except (subprocess.TimeoutExpired, OSError):
                 process.terminate()
                 threading.Thread(target=process.wait, kwargs={"timeout": 5}, daemon=True).start()
