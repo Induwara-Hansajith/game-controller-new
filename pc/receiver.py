@@ -31,6 +31,8 @@ VERSION = "0.1.0-beta.1"
 state_lock = threading.Lock()
 shutdown_event = threading.Event()
 active_writer: asyncio.StreamWriter | None = None
+phone_writers: set[asyncio.StreamWriter] = set()
+phone_handlers: set[asyncio.Task] = set()
 
 state = {
     "version": VERSION,
@@ -66,13 +68,16 @@ def local_ipv4_addresses() -> list[str]:
     primary: str | None = None
 
     # Probe primary outbound route (does not transmit data)
+    probe = None
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         probe.connect(("8.8.8.8", 80))
         primary = probe.getsockname()[0]
-        probe.close()
     except OSError:
         pass
+    finally:
+        if probe is not None:
+            probe.close()
 
     try:
         for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM):
@@ -178,6 +183,10 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     phone_name = "Phone"
     acquired = False
     authenticated = False
+    task = asyncio.current_task()
+    phone_writers.add(writer)
+    if task is not None:
+        phone_handlers.add(task)
 
     try:
         raw = await asyncio.wait_for(reader.readline(), timeout=8)
@@ -195,10 +204,12 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             await send_json(writer, {"type": "error", "message": "Pairing PIN did not match."})
             return
 
-        # If a phone reconnects with matching PIN while a previous socket is hanging, close old socket
-        if active_writer is not None and active_writer is not writer:
-            old_writer = active_writer
-            active_writer = None
+        # Claim the new session before closing the old socket. Its finally block
+        # must not release vJoy or overwrite state after this writer takes ownership.
+        old_writer = active_writer if active_writer is not writer else None
+        active_writer = writer
+        authenticated = True
+        if old_writer is not None:
             try:
                 old_writer.close()
             except Exception:
@@ -212,8 +223,6 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             # Keep the live dashboard and preview usable even if vJoy was busy
             update_state(vjoy=str(exc), message="Connected for preview; vJoy is unavailable")
 
-        active_writer = writer
-        authenticated = True
         current_vjoy = device.description if acquired else snapshot()["vjoy"]
         update_state(
             connected=True,
@@ -263,9 +272,10 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     except (asyncio.TimeoutError, ConnectionError, OSError):
         pass
     finally:
-        if authenticated:
+        if authenticated and active_writer is writer:
             if acquired:
                 device.close()
+            active_writer = None
             update_state(
                 connected=False,
                 phone="",
@@ -277,13 +287,15 @@ async def serve_phone(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 buttons=[],
                 last_packet=0.0,
             )
-            if active_writer is writer:
-                active_writer = None
         writer.close()
         try:
             await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
         except (OSError, asyncio.TimeoutError):
             pass
+        finally:
+            phone_writers.discard(writer)
+            if task is not None:
+                phone_handlers.discard(task)
 
 
 async def broadcast_presence() -> None:
@@ -294,8 +306,11 @@ async def broadcast_presence() -> None:
 
     try:
         while not shutdown_event.is_set():
-            if not state.get("connected"):
-                addrs = local_ipv4_addresses()
+            current = snapshot()
+            addrs = local_ipv4_addresses()
+            if addrs != current.get("addresses"):
+                update_state(addresses=addrs)
+            if not current.get("connected"):
                 beacon = {
                     "service": "pocket-controller",
                     "version": VERSION,
@@ -343,6 +358,7 @@ async def main() -> None:
         server = await asyncio.start_server(lambda r, w: serve_phone(r, w, device), INPUT_HOST, INPUT_PORT)
     except OSError as exc:
         dashboard.shutdown()
+        dashboard.server_close()
         raise SystemExit(f"Could not listen on port {INPUT_PORT}: {exc}") from exc
 
     print("Pocket Controller receiver is ready.")
@@ -353,6 +369,8 @@ async def main() -> None:
     print(f"vJoy: {vjoy_status}")
     print("Press Ctrl+C to stop.")
 
+    shutdown_watcher = None
+    bcast_task = None
     try:
         async with server:
             shutdown_watcher = asyncio.create_task(check_shutdown(server))
@@ -361,8 +379,26 @@ async def main() -> None:
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
-        dashboard.shutdown()
+        shutdown_event.set()
+        server.close()
+        await server.wait_closed()
+        for connection_writer in tuple(phone_writers):
+            connection_writer.close()
+        background_tasks = [task for task in (shutdown_watcher, bcast_task) if task is not None]
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        if phone_handlers:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tuple(phone_handlers), return_exceptions=True), timeout=1.5
+                )
+            except asyncio.TimeoutError:
+                pass
         device.close()
+        dashboard.shutdown()
+        dashboard.server_close()
 
 
 if __name__ == "__main__":

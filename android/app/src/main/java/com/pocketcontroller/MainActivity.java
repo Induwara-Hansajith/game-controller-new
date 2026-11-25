@@ -1,9 +1,12 @@
 package com.pocketcontroller;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -11,10 +14,14 @@ import android.hardware.SensorManager;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -31,21 +38,14 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Locale;
 
-public final class MainActivity extends Activity implements SensorEventListener {
-    private static final int BG = Color.rgb(12, 10, 16);
-    private static final int PANEL = Color.rgb(27, 22, 36);
-    private static final int PURPLE = Color.rgb(154, 115, 255);
-    private static final int MUTED = Color.rgb(185, 176, 200);
+public final class MainActivity extends Activity implements SensorEventListener, ControllerPad.Listener {
+    private static final int BG_COLOR = 0xff07050b;
     private static final int PORT = 8766;
     private static final int DISCOVERY_PORT = 8767;
 
-    private EditText addressField;
-    private EditText pinField;
-    private Button connectButton;
-    private TextView statusText;
-    private Switch gyroSwitch;
     private ControllerPad controllerPad;
     private SensorManager sensorManager;
     private Sensor rotationSensor;
@@ -59,6 +59,7 @@ public final class MainActivity extends Activity implements SensorEventListener 
     private volatile boolean connected;
     private volatile boolean connecting;
     private volatile long connectionToken;
+
     private volatile float currentRoll;
     private volatile float neutralRoll;
     private volatile boolean hasNeutral;
@@ -69,114 +70,346 @@ public final class MainActivity extends Activity implements SensorEventListener 
     private volatile float brake;
     private volatile boolean[] buttons = new boolean[8];
 
+    private boolean gyroEnabled = true;
+    private String discoveredHost = "";
+    private String discoveredPin = "";
+    private String discoveredName = "";
+
+    private Dialog setupDialog;
+    private EditText addressField;
+    private EditText pinField;
+    private TextView dialogStatusText;
+    private Button dialogConnectBtn;
+    private TextView discoveredCardText;
+    private Button autoConnectBtn;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
-        buildUi();
+        applyImmersive();
+
+        controllerPad = new ControllerPad(this);
+        controllerPad.setListener(this);
+        setContentView(controllerPad);
+
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        if (sensorManager != null) {
+            rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        }
         if (rotationSensor == null) {
-            statusText.setText("No orientation sensor · touch steering is available");
-            gyroSwitch.setChecked(false);
-            gyroSwitch.setEnabled(false);
+            gyroEnabled = false;
+            controllerPad.setGyroEnabled(false);
+        }
+
+        SharedPreferences prefs = getSharedPreferences("controller", MODE_PRIVATE);
+        discoveredHost = prefs.getString("last_host", "");
+        discoveredPin = prefs.getString("last_pin", "");
+
+        // Auto-open setup if no previous connection saved
+        if (discoveredHost.isEmpty()) {
+            postOpenSetup();
         }
     }
 
-    private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(10), dp(14), dp(10));
-        root.setBackgroundColor(BG);
-
-        LinearLayout header = new LinearLayout(this);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = new TextView(this);
-        title.setText("Pocket Controller");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(20);
-        title.setTypeface(null, 1);
-        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        statusText = new TextView(this);
-        statusText.setText("Enter your PC address and pairing PIN");
-        statusText.setTextColor(MUTED);
-        statusText.setTextSize(12);
-        statusText.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        header.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1.5f));
-        root.addView(header, new LinearLayout.LayoutParams(-1, dp(38)));
-
-        LinearLayout connectRow = new LinearLayout(this);
-        connectRow.setGravity(Gravity.CENTER_VERTICAL);
-        connectRow.setPadding(dp(8), dp(5), dp(8), dp(5));
-        connectRow.setBackgroundColor(PANEL);
-        addressField = editField("PC address", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        SharedPreferences prefs = getSharedPreferences("controller", MODE_PRIVATE);
-        addressField.setText(prefs.getString("address", ""));
-        connectRow.addView(addressField, new LinearLayout.LayoutParams(0, dp(42), 1.5f));
-        pinField = editField("PIN", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        pinField.setMaxEms(6);
-        connectRow.addView(pinField, new LinearLayout.LayoutParams(0, dp(42), 0.7f));
-        connectButton = new Button(this);
-        connectButton.setText("Connect");
-        connectButton.setOnClickListener(view -> {
-            if (connected || connecting) disconnect();
-            else connect();
-        });
-        connectRow.addView(connectButton, new LinearLayout.LayoutParams(dp(112), dp(42)));
-        gyroSwitch = new Switch(this);
-        gyroSwitch.setText("Gyro steer");
-        gyroSwitch.setTextColor(Color.WHITE);
-        gyroSwitch.setTextSize(13);
-        gyroSwitch.setChecked(true);
-        gyroSwitch.setPadding(dp(8), 0, dp(4), 0);
-        gyroSwitch.setOnCheckedChangeListener((button, checked) -> {
-            if (checked) calibrate();
-            if (controllerPad != null) controllerPad.invalidate();
-        });
-        connectRow.addView(gyroSwitch, new LinearLayout.LayoutParams(-2, dp(42)));
-        Button centerButton = new Button(this);
-        centerButton.setText("Center");
-        centerButton.setOnClickListener(view -> calibrate());
-        connectRow.addView(centerButton, new LinearLayout.LayoutParams(dp(90), dp(42)));
-        root.addView(connectRow, new LinearLayout.LayoutParams(-1, dp(54)));
-
-        controllerPad = new ControllerPad(this);
-        controllerPad.setListener((steer, steeringTouch, newThrottle, newBrake, newButtons) -> {
-            touchSteer = steer;
-            touchingWheel = steeringTouch;
-            throttle = newThrottle;
-            brake = newBrake;
-            buttons = newButtons;
-        });
-        root.addView(controllerPad, new LinearLayout.LayoutParams(-1, 0, 1));
-        setContentView(root);
+    private void applyImmersive() {
+        View decor = getWindow().getDecorView();
+        decor.setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        );
+        getWindow().setStatusBarColor(BG_COLOR);
+        getWindow().setNavigationBarColor(BG_COLOR);
     }
 
-    private EditText editField(String hint, int inputType) {
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) applyImmersive();
+    }
+
+    private void postOpenSetup() {
+        controllerPad.postDelayed(this::onOpenSetup, 250);
+    }
+
+    @Override
+    public void onInputChanged(float steer, boolean isTouchingWheel, float newThrottle, float newBrake, boolean[] newButtons) {
+        this.touchSteer = steer;
+        this.touchingWheel = isTouchingWheel;
+        this.throttle = newThrottle;
+        this.brake = newBrake;
+        if (newButtons != null) {
+            System.arraycopy(newButtons, 0, this.buttons, 0, Math.min(newButtons.length, 8));
+        }
+    }
+
+    @Override
+    public void onOpenSetup() {
+        showSetupDialog();
+    }
+
+    @Override
+    public void onToggleMode() {
+        // Mode toggled in ControllerPad
+    }
+
+    @Override
+    public void onCalibrate() {
+        calibrate();
+    }
+
+    @Override
+    public void onToggleGyro() {
+        gyroEnabled = !gyroEnabled;
+        controllerPad.setGyroEnabled(gyroEnabled);
+        if (gyroEnabled) calibrate();
+    }
+
+    private void showSetupDialog() {
+        if (setupDialog != null && setupDialog.isShowing()) return;
+
+        setupDialog = new Dialog(this);
+        setupDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        setupDialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(18), dp(20), dp(18));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff120e1c);
+        bg.setCornerRadius(dp(18));
+        bg.setStroke(dp(1.2f), 0xff292038);
+        layout.setBackground(bg);
+
+        // Header with Close
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("Pocket Controller Setup");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(17);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView closeBtn = new TextView(this);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(0xff94a3b8);
+        closeBtn.setTextSize(18);
+        closeBtn.setPadding(dp(8), dp(4), dp(8), dp(4));
+        closeBtn.setOnClickListener(v -> setupDialog.dismiss());
+        header.addView(closeBtn, new LinearLayout.LayoutParams(-2, -2));
+        layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        // 1. Auto-Discovery Card
+        layout.addView(createSectionTitle("AUTO-DETECTED PC COMPANION"));
+        LinearLayout discCard = createCardLayout();
+        discoveredCardText = new TextView(this);
+        discoveredCardText.setTextSize(12.5f);
+        discoveredCardText.setTextColor(0xffcbd5e1);
+        updateDiscoveryCard();
+        discCard.addView(discoveredCardText);
+
+        autoConnectBtn = createAccentButton("⚡ Quick Connect");
+        autoConnectBtn.setOnClickListener(v -> {
+            if (!discoveredHost.isEmpty() && !discoveredPin.isEmpty()) {
+                addressField.setText(discoveredHost);
+                pinField.setText(discoveredPin);
+                connect();
+            }
+        });
+        autoConnectBtn.setVisibility(discoveredHost.isEmpty() ? View.GONE : View.VISIBLE);
+        discCard.addView(autoConnectBtn, new LinearLayout.LayoutParams(-1, dp(40)));
+        layout.addView(discCard);
+
+        // 2. Manual Connection Card
+        layout.addView(createSectionTitle("MANUAL CONNECTION"));
+        LinearLayout manualCard = createCardLayout();
+
+        addressField = createEditField("PC IPv4 (e.g. 192.168.1.85)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        addressField.setText(discoveredHost);
+        manualCard.addView(addressField, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        pinField = createEditField("6-digit PIN", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        pinField.setText(discoveredPin);
+        manualCard.addView(pinField, new LinearLayout.LayoutParams(-1, dp(42)));
+
+        dialogConnectBtn = createAccentButton(connected ? "Disconnect" : (connecting ? "Cancel" : "Connect to PC"));
+        dialogConnectBtn.setOnClickListener(v -> {
+            if (connected || connecting) {
+                disconnect();
+            } else {
+                connect();
+            }
+        });
+        manualCard.addView(dialogConnectBtn, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        dialogStatusText = new TextView(this);
+        dialogStatusText.setText(connected ? "Connected to " + discoveredHost : "Enter your PC address and pairing PIN");
+        dialogStatusText.setTextColor(connected ? 0xff10b981 : 0xff94a3b8);
+        dialogStatusText.setTextSize(12);
+        dialogStatusText.setGravity(Gravity.CENTER);
+        dialogStatusText.setPadding(0, dp(6), 0, 0);
+        manualCard.addView(dialogStatusText);
+        layout.addView(manualCard);
+
+        // 3. Settings Card
+        layout.addView(createSectionTitle("CONTROLS & CALIBRATION"));
+        LinearLayout settingsCard = createCardLayout();
+
+        Switch gyroToggle = new Switch(this);
+        gyroToggle.setText("Gyroscope Tilt Steering");
+        gyroToggle.setTextColor(Color.WHITE);
+        gyroToggle.setChecked(gyroEnabled);
+        gyroToggle.setOnCheckedChangeListener((btn, checked) -> {
+            gyroEnabled = checked;
+            controllerPad.setGyroEnabled(checked);
+            if (checked) calibrate();
+        });
+        settingsCard.addView(gyroToggle, new LinearLayout.LayoutParams(-1, dp(40)));
+
+        Button centerBtn = createOutlineButton("⌖ Calibrate Neutral Center");
+        centerBtn.setOnClickListener(v -> {
+            calibrate();
+            dialogStatusText.setText("Neutral center calibrated!");
+            dialogStatusText.setTextColor(0xff34d399);
+        });
+        settingsCard.addView(centerBtn, new LinearLayout.LayoutParams(-1, dp(40)));
+
+        layout.addView(settingsCard);
+
+        scroll.addView(layout);
+        setupDialog.setContentView(scroll);
+        setupDialog.getWindow().setLayout(dp(440), ViewGroup.LayoutParams.WRAP_CONTENT);
+        setupDialog.show();
+    }
+
+    private void updateDiscoveryCard() {
+        if (discoveredCardText == null) return;
+        if (!discoveredHost.isEmpty() && !discoveredPin.isEmpty()) {
+            discoveredCardText.setText("Detected: " + (discoveredName.isEmpty() ? "PC" : discoveredName) + "\n"
+                    + discoveredHost + " · PIN: " + discoveredPin);
+            if (autoConnectBtn != null) autoConnectBtn.setVisibility(View.VISIBLE);
+        } else {
+            discoveredCardText.setText("Scanning Wi-Fi broadcast (port 8767)…\nKeep PC companion open on the same network.");
+            if (autoConnectBtn != null) autoConnectBtn.setVisibility(View.GONE);
+        }
+    }
+
+    private TextView createSectionTitle(String title) {
+        TextView tv = new TextView(this);
+        tv.setText(title);
+        tv.setTextColor(0xffa78bfa);
+        tv.setTextSize(10.5f);
+        tv.setTypeface(null, android.graphics.Typeface.BOLD);
+        tv.setPadding(dp(4), dp(10), dp(4), dp(4));
+        return tv;
+    }
+
+    private LinearLayout createCardLayout() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff181324);
+        bg.setCornerRadius(dp(12));
+        bg.setStroke(dp(1), 0xff2e253e);
+        card.setBackground(bg);
+        return card;
+    }
+
+    private EditText createEditField(String hint, int inputType) {
         EditText field = new EditText(this);
         field.setSingleLine(true);
         field.setHint(hint);
-        field.setHintTextColor(MUTED);
+        field.setHintTextColor(0xff64748b);
         field.setTextColor(Color.WHITE);
-        field.setTextSize(14);
+        field.setTextSize(13.5f);
         field.setInputType(inputType);
-        field.setPadding(dp(10), 0, dp(10), 0);
+        field.setPadding(dp(12), dp(6), dp(12), dp(6));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff0f0c18);
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(dp(1), 0xff292038);
+        field.setBackground(bg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(40));
+        lp.setMargins(0, dp(4), 0, dp(6));
+        field.setLayoutParams(lp);
         return field;
     }
 
+    private Button createAccentButton(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(13);
+        btn.setTypeface(null, android.graphics.Typeface.BOLD);
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff7c3aed);
+        bg.setCornerRadius(dp(8));
+        btn.setBackground(bg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(42));
+        lp.setMargins(0, dp(6), 0, dp(4));
+        btn.setLayoutParams(lp);
+        return btn;
+    }
+
+    private Button createOutlineButton(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextColor(0xffc4b5fd);
+        btn.setTextSize(12.5f);
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xff1f192c);
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(dp(1), 0xff473b5e);
+        btn.setBackground(bg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(40));
+        lp.setMargins(0, dp(6), 0, dp(2));
+        btn.setLayoutParams(lp);
+        return btn;
+    }
+
     private void connect() {
-        String host = addressField.getText().toString().trim();
-        String pin = pinField.getText().toString().trim();
+        String host = addressField != null ? addressField.getText().toString().trim() : discoveredHost;
+        String pin = pinField != null ? pinField.getText().toString().trim() : discoveredPin;
+
         if (host.isEmpty() || pin.length() != 6) {
-            statusText.setText("Enter the PC address and its six-digit PIN");
+            if (dialogStatusText != null) {
+                dialogStatusText.setText("Enter valid PC IP and 6-digit PIN");
+                dialogStatusText.setTextColor(0xfff43f5e);
+            }
             return;
         }
-        getSharedPreferences("controller", MODE_PRIVATE).edit().putString("address", host).apply();
+
+        getSharedPreferences("controller", MODE_PRIVATE).edit()
+                .putString("last_host", host)
+                .putString("last_pin", pin)
+                .apply();
+
         connecting = true;
-        connectButton.setText("Cancel");
-        statusText.setText("Connecting to " + host + "…");
+        if (dialogConnectBtn != null) dialogConnectBtn.setText("Cancel");
+        if (dialogStatusText != null) {
+            dialogStatusText.setText("Connecting to " + host + "…");
+            dialogStatusText.setTextColor(0xff38bdf8);
+        }
+
         long token = ++connectionToken;
         Thread worker = new Thread(() -> runConnection(host, pin, token), "controller-connection");
         worker.start();
@@ -185,39 +418,55 @@ public final class MainActivity extends Activity implements SensorEventListener 
     private void runConnection(String host, String pin, long token) {
         Socket candidate = new Socket();
         try {
-            candidate.connect(new InetSocketAddress(host, PORT), 5000);
-            if (token != connectionToken) throw new InterruptedException("Connection cancelled");
+            candidate.connect(new InetSocketAddress(host, PORT), 4500);
+            if (token != connectionToken) throw new InterruptedException("Cancelled");
+
             socket = candidate;
             BufferedReader reader = new BufferedReader(new InputStreamReader(candidate.getInputStream(), StandardCharsets.UTF_8));
             BufferedWriter output = new BufferedWriter(new OutputStreamWriter(candidate.getOutputStream(), StandardCharsets.UTF_8));
             writer = output;
+
             JSONObject hello = new JSONObject();
             hello.put("type", "hello");
             hello.put("pin", pin);
-            hello.put("name", android.os.Build.MODEL == null ? "Android phone" : android.os.Build.MODEL);
+            hello.put("name", android.os.Build.MODEL == null ? "Android Phone" : android.os.Build.MODEL);
             output.write(hello.toString());
             output.newLine();
             output.flush();
+
             String response = reader.readLine();
             if (response == null || !response.contains("\"type\":\"ready\"")) {
-                String reason = response == null ? "PC closed the connection" : new JSONObject(response).optString("message", "Pairing was rejected");
+                String reason = response == null ? "PC closed connection" : new JSONObject(response).optString("message", "Pairing rejected");
                 throw new IllegalStateException(reason);
             }
-            if (token != connectionToken) throw new InterruptedException("Connection cancelled");
+
+            if (token != connectionToken) throw new InterruptedException("Cancelled");
             connected = true;
             connecting = false;
+
             runOnUiThread(() -> {
-                connectButton.setText("Disconnect");
-                statusText.setText("Connected · keep this screen open while playing");
+                if (dialogConnectBtn != null) dialogConnectBtn.setText("Disconnect");
+                if (dialogStatusText != null) {
+                    dialogStatusText.setText("Connected to " + host);
+                    dialogStatusText.setTextColor(0xff10b981);
+                }
+                controllerPad.setConnectionStatus(true, discoveredName.isEmpty() ? host : discoveredName, "60Hz · 4ms");
+                if (setupDialog != null && setupDialog.isShowing()) {
+                    setupDialog.dismiss();
+                }
             });
+
             calibrate();
+
             while (connected && token == connectionToken && !candidate.isClosed()) {
                 JSONObject packet = inputPacket();
                 output.write(packet.toString());
                 output.newLine();
                 output.flush();
-                if (outputError(output)) throw new IllegalStateException("PC stopped receiving input");
-                Thread.sleep(25);
+                if (writer != output || socket == null || socket.isClosed()) {
+                    throw new IllegalStateException("Socket disconnected");
+                }
+                Thread.sleep(20);
             }
         } catch (Exception error) {
             boolean cancelled = token != connectionToken;
@@ -225,30 +474,37 @@ public final class MainActivity extends Activity implements SensorEventListener 
             connecting = false;
             closeSocket(candidate);
             String message = error.getMessage() == null ? "Connection ended" : error.getMessage();
-            if (!cancelled) runOnUiThread(() -> {
-                connectButton.setText("Connect");
-                statusText.setText(message);
-            });
+            if (!cancelled) {
+                runOnUiThread(() -> {
+                    if (dialogConnectBtn != null) dialogConnectBtn.setText("Connect to PC");
+                    if (dialogStatusText != null) {
+                        dialogStatusText.setText(message);
+                        dialogStatusText.setTextColor(0xfff43f5e);
+                    }
+                    controllerPad.setConnectionStatus(false, "DISCONNECTED", "0Hz");
+                });
+            }
             return;
         } finally {
             if (socket == candidate) socket = null;
             if (writer != null && (candidate.isClosed() || token != connectionToken)) writer = null;
         }
+
         connected = false;
         connecting = false;
         closeSocket(candidate);
         runOnUiThread(() -> {
-            connectButton.setText("Connect");
-            statusText.setText("Disconnected");
+            if (dialogConnectBtn != null) dialogConnectBtn.setText("Connect to PC");
+            if (dialogStatusText != null) {
+                dialogStatusText.setText("Disconnected");
+                dialogStatusText.setTextColor(0xff94a3b8);
+            }
+            controllerPad.setConnectionStatus(false, "DISCONNECTED", "0Hz");
         });
     }
 
-    private boolean outputError(BufferedWriter output) {
-        return writer != output || socket == null || socket.isClosed();
-    }
-
     private JSONObject inputPacket() throws Exception {
-        float steer = touchingWheel || !gyroSwitch.isChecked() ? touchSteer : gyroSteer;
+        float steer = touchingWheel || !gyroEnabled ? touchSteer : gyroSteer;
         JSONObject packet = new JSONObject();
         packet.put("type", "input");
         packet.put("steer", finite(steer));
@@ -256,7 +512,9 @@ public final class MainActivity extends Activity implements SensorEventListener 
         packet.put("brake", finite(brake));
         JSONArray pressed = new JSONArray();
         boolean[] current = buttons;
-        for (int i = 0; i < 8; i++) pressed.put(i < current.length && current[i]);
+        for (int i = 0; i < 8; i++) {
+            pressed.put(i < current.length && current[i]);
+        }
         packet.put("buttons", pressed);
         return packet;
     }
@@ -273,13 +531,17 @@ public final class MainActivity extends Activity implements SensorEventListener 
         socket = null;
         writer = null;
         closeSocket(old);
-        connectButton.setText("Connect");
-        statusText.setText("Disconnected");
+        if (dialogConnectBtn != null) dialogConnectBtn.setText("Connect to PC");
+        if (dialogStatusText != null) {
+            dialogStatusText.setText("Disconnected");
+            dialogStatusText.setTextColor(0xff94a3b8);
+        }
+        controllerPad.setConnectionStatus(false, "DISCONNECTED", "0Hz");
     }
 
     private void closeSocket(Socket value) {
         if (value != null) {
-            try { value.close(); } catch (Exception ignored) { }
+            try { value.close(); } catch (Exception ignored) {}
         }
     }
 
@@ -334,9 +596,9 @@ public final class MainActivity extends Activity implements SensorEventListener 
 
     private void stopDiscovery() {
         discovering = false;
-        DatagramSocket socket = discoverySocket;
-        if (socket != null) {
-            try { socket.close(); } catch (Exception ignored) {}
+        DatagramSocket s = discoverySocket;
+        if (s != null) {
+            try { s.close(); } catch (Exception ignored) {}
         }
         if (discoveryThread != null) {
             discoveryThread.interrupt();
@@ -345,23 +607,23 @@ public final class MainActivity extends Activity implements SensorEventListener 
     }
 
     private void onDiscoveredPc(String host, String pin, String hostname) {
-        if (connected || connecting) return;
-        String curHost = addressField.getText().toString().trim();
-        if (curHost.isEmpty()) {
+        this.discoveredHost = host;
+        this.discoveredPin = pin;
+        this.discoveredName = hostname;
+
+        if (addressField != null && addressField.getText().toString().trim().isEmpty()) {
             addressField.setText(host);
-            if (!pin.isEmpty() && pinField.getText().toString().trim().isEmpty()) {
-                pinField.setText(pin);
-            }
-            statusText.setText("Auto-detected " + hostname + " (" + host + ") · Tap Connect");
-            statusText.setTextColor(Color.rgb(110, 231, 183));
-        } else if (!curHost.equals(host)) {
-            statusText.setText("Detected: " + hostname + " (" + host + ")");
         }
+        if (pinField != null && pinField.getText().toString().trim().isEmpty()) {
+            pinField.setText(pin);
+        }
+        updateDiscoveryCard();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        applyImmersive();
         if (sensorManager != null && rotationSensor != null) {
             sensorManager.registerListener(this, rotationSensor, SensorManager.SENSOR_DELAY_GAME);
         }
@@ -399,9 +661,16 @@ public final class MainActivity extends Activity implements SensorEventListener 
         while (delta > Math.PI) delta -= (float) (2 * Math.PI);
         while (delta < -Math.PI) delta += (float) (2 * Math.PI);
         gyroSteer = finite(delta / (float) Math.toRadians(45));
-        if (controllerPad != null) controllerPad.setDisplayedInput(gyroSwitch.isChecked() && !touchingWheel ? gyroSteer : touchSteer, throttle, brake, buttons);
+        if (controllerPad != null) {
+            controllerPad.setDisplayedInput(
+                    gyroEnabled && !touchingWheel ? gyroSteer : touchSteer,
+                    throttle,
+                    brake,
+                    buttons
+            );
+        }
     }
 
     @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) { }
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {}
 }

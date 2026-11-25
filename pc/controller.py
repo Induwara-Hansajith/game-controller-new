@@ -190,8 +190,8 @@ class VJoyDevice:
     def close(self) -> None:
         if self._acquired and self._dll is not None:
             try:
-                self.neutral()
                 self._dll.ResetVJD(self.device_id)
+                self.neutral()
                 self._dll.RelinquishVJD(self.device_id)
             except Exception:
                 pass
