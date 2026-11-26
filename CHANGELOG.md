@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.8 - Native iOS app & macOS IPA build workflow
+
+### iOS mobile app (`ios/`)
+
+- Added native Swift iOS app (`iOS 15.0+`, locked landscape) with full feature parity: `CoreMotion` screen-axis steering-wheel rotation, `F1 Crisp` / `Balanced` / `Smooth` profiles, `45°–180°` lock range, `250Hz` `PCU1` binary `UDP` with `0ms` button/pedal edge wakeup, TCP fallback, auto-discovery (`8767`), silent reconnect, Gyro Racepad layout (hidden wheel + wide left Brake & right Gas), Touch Wheel Racepad, Xbox Gamepad, and drag-and-resize **Edit Layout Mode**.
+- Added `.github/workflows/build-ios.yml` (`macos-15` + `xcodegen` + `xcodebuild`) to produce `PocketController-iOS.ipa` automatically on pushes to `main`.
+
 ## 0.1.0-beta.7 - Competitive F1 ultra-low-latency tuning
 
 ### Android mobile app

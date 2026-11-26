@@ -1,0 +1,48 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build-ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    name: Build Unsigned PocketController IPA
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build unsigned iOS app
+        working-directory: ios
+        run: |
+          xcodebuild clean build             -project PocketController.xcodeproj             -scheme PocketController             -configuration Release             -sdk iphoneos             -derivedDataPath build/DerivedData             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             DEVELOPMENT_TEAM=""
+
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/DerivedData/Build/Products/Release-iphoneos/PocketController.app dist/Payload/
+          cd dist
+          zip -r -y PocketController-iOS.ipa Payload
+          ls -lh PocketController-iOS.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketController-iOS-ipa
+          path: ios/dist/PocketController-iOS.ipa
+          if-no-files-found: error

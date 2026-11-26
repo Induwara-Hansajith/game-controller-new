@@ -1,0 +1,30 @@
+name: PocketController
+options:
+  bundleIdPrefix: com.pocketcontroller
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0-beta.8"
+    CURRENT_PROJECT_VERSION: "9"
+    PRODUCT_NAME: PocketController
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+targets:
+  PocketController:
+    type: application
+    platform: iOS
+    sources:
+      - path: PocketController
+    info:
+      path: PocketController/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pocketcontroller.ios
+        INFOPLIST_FILE: PocketController/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: "NO"
